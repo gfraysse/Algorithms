@@ -6,12 +6,12 @@
 # How-to run: 
 #   python3 dijkstra.py
 
-# Python implementation of the Dijkstra Shortest Path algorithm
+# Python implementation of the Dijkstra Shortest Path algorithm (1956)
 
 # References :
-#   https://doi.org/10.1007%2FBF01386390
-#   http://www-m3.ma.tum.de/twiki/pub/MN0506/WebHome/dijkstra.pdf
-#   https://en.wikipedia.org/wiki/Dijkstra%27s_algorithm
+#   * https://doi.org/10.1007%2FBF01386390
+#   * http://www-m3.ma.tum.de/twiki/pub/MN0506/WebHome/dijkstra.pdf
+#   * https://en.wikipedia.org/wiki/Dijkstra%27s_algorithm
 
 # Complexity is O(|E| + |V|^2)
 
@@ -35,18 +35,17 @@ def dijkstra(adjacency_matrix, entry):
     INFINITY = 100000
 
     current_vertex = entry
-    num_nodes = 9
+    num_nodes = len(adjacency_matrix)
     vertices = []
     for i in range(num_nodes):        
         vertices.append(string.ascii_uppercase[i])
         
-    Q = [i for i in range(len(vertices))]
+    Q = [i for i in range(num_nodes)]
 
-    dist = [0 for _ in range(len(vertices))] # distance to src
+    dist = [0 for _ in range(num_nodes)] # distance to src    
+    prev = [0 for _ in range(num_nodes)] # list of nodes on the path
     
-    prev = [0 for _ in range(len(vertices))]
-    
-    for i in range(len(vertices)):
+    for i in range(num_nodes):
         dist[i] = INFINITY
         prev[i] = []
 
@@ -69,7 +68,7 @@ def dijkstra(adjacency_matrix, entry):
                 prev[n] = prev[v][:]
                 prev[n].append(v)
 
-    return dist,prev
+    return dist, prev
 
 #=============================================================================#
 def main(arguments):
