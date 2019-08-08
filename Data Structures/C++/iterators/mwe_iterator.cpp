@@ -33,8 +33,8 @@ class CounterVector {
   class iterator {
    public:
     explicit iterator(CounterVector *ptr, int idx);
-    iterator operator++();
-    iterator operator++(int);
+    iterator operator++();    // prefix operator: ++i
+    iterator operator++(int); // postfix operator: i++
     bool operator!=(const iterator & other) const;
     Counter& operator*() const;
     const Counter * operator+(size_t s) const;
@@ -48,8 +48,8 @@ class CounterVector {
   class const_iterator {
    public:
     explicit const_iterator(const CounterVector *ptr, int idx);
-    const_iterator operator++();
-    const_iterator operator++(int);
+    const_iterator operator++();    // prefix operator: ++i
+    const_iterator operator++(int); // postfix operator: i++
     bool operator!=(const const_iterator & other) const;
     Counter& operator*() const;
     const Counter* operator+(size_t s) const;
@@ -63,8 +63,8 @@ class CounterVector {
   class reverse_iterator {
    public:
     explicit reverse_iterator(CounterVector *ptr, int idx);
-    reverse_iterator operator++();
-    reverse_iterator operator++(int);
+    reverse_iterator operator++();    // prefix operator: ++i
+    reverse_iterator operator++(int); // postfix operator: i++
     bool operator!=(const reverse_iterator & other) const;
     Counter& operator*() const;
     const Counter* operator+(size_t s) const;
@@ -320,6 +320,32 @@ int main(int argc, char**argv) {
     std::string s_const_iterator = "const_iterator: ";
     std::string s_reverse_iterator = "reverse_iterator: ";
 
+    // sample iterator on a vector of integers
+    std::cerr << "vector<int> iterator" << std::endl;
+    std::vector<int> sample_vector = {1, 2, 3, 4, 5};
+    for (std::vector<int>::iterator it = sample_vector.begin(); it != sample_vector.end(); ++it) {
+	std::cerr << "*it=" << *it << std::endl;
+	// Does not crash, g++ output 0 when accessing an out-o-range iterators
+	std::cerr << "*(it + 1)=" << *(it + 1) << std::endl;
+    }
+
+    // sample iterator on a vector of string
+    std::cerr << "vector<string> iterator" << std::endl;
+    std::vector<std::string> sample_string_vector = {"a", "b", "c", "d", "e"};
+    for (std::vector<std::string>::iterator it = sample_string_vector.begin(); it != sample_string_vector.end(); ++it) {
+	std::cerr << "*it=" << *it << std::endl;
+	// No exception is raised when trying to access an iterator
+	// out of range, it just segfaults
+	/*
+	try {
+	    std::cerr << "*(it + 1)=" << *(it + 1) << std::endl;
+	} catch(const std::exception &e) {
+	    std::cerr << e.what() << std::endl;
+	    }*/
+	
+    }
+
+    std::cerr << "CounterVector iterator" << std::endl;
     for (auto &all_v : c->getCounterVectors()) {
 	// std::cerr << __func__ << ":" << __LINE__ << std::endl;
         // std::cerr << "type of all_v=" << typeid(all_v).name() << std::endl;
@@ -335,11 +361,20 @@ int main(int argc, char**argv) {
         // CounterVector::iterator it = all_v.begin();
         // std::cerr << "begin="<< std::hex << &it << std::dec << std::endl;
         // it = all_v.end();
-        // std::cerr << "end=" << std::hex << &it << std::dec << std::endl;
+        // std::cerr << "end=" << std::hex << &it << std::dec <<
+        // std::endl;
+	unsigned int i = 0;
         for (CounterVector::iterator itr= all_v.begin(); itr != all_v.end(); ++itr) {
             // std::cerr << "itr.getNode=" << (*itr).getNode() << std::endl;
             // std::cerr << "itr.getCounter=" << (*itr).getCounter() << std::endl;
             s_iterator2 += (*itr).getNode() + "(" + std::to_string((*itr).getCounter()) + "),";
+	    // std::cerr << "i=" << i << std::endl;
+	    // std::cerr << "size=" << all_v.size() << std::endl;
+	    if (i + 1 <= all_v.size() - 1) {
+		// Testing operator+
+		std::cerr << (itr + 1)->getNode() << std::endl;
+              }
+	    ++i;
         }
 
         const CounterVector* v2 = const_cast<const CounterVector *>(&all_v);
