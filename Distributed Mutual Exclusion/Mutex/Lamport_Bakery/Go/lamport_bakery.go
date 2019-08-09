@@ -30,6 +30,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"strings"
 	"strconv"
@@ -45,13 +46,21 @@ func displayNodes() {
 }
 */
 
-func sumVector(v [10]int) int {
+func sumVector(v [4]int) int {
 	var r = 0
 	for i := 0; i < len(v); i++ {
 		r += v[i]
 	}
 	return r
 }
+
+// ByTimestamp implements sort.Interface for Requests
+type ByTimestamp []Request
+
+func (a ByTimestamp) Len() int           { return len(a) }
+func (a ByTimestamp) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByTimestamp) Less(i, j int) bool { return a[i].timestamp < a[j].timestamp }
+
 
 type Request struct {
 	id        int
@@ -62,8 +71,19 @@ type Node struct {
 	id         int
 	timestamp  int
 	queue      []Request
+	replies    [4]int
 	channel    chan string
 	messages   [4]chan string
+}
+
+func (n *Node) String() string {
+	var val string
+	val = fmt.Sprintf("Node #%d, timestamp=%d\n", n.id, n.timestamp)
+	for i := 0; i < len(n.queue); i ++ {
+		val = val + fmt.Sprintf("  req #%d, timestamp=%d\n", n.queue[i].id, n.queue[i].timestamp)
+		
+	}
+	return val
 }
 
 func (n *Node) enterCS() {
@@ -71,13 +91,11 @@ func (n *Node) enterCS() {
 	time.Sleep(500 * time.Millisecond)
 }
 
-func (n *Node) sendRequestToAllOtherNodes() {
-	log.Print("node #", n.id," sendRequestToAllOtherNodes")	
+func (n *Node) sendRequestToAllOtherNodes(r Request) {
+	// log.Print("node #", n.id," sendRequestToAllOtherNodes")	
 	for i := 0; i < len(n.messages); i++ {
-		log.Print("node #", n.id," sendRequestToAllOtherNodes i=", i)
-
 		if n.id != i {
-			var content = fmt.Sprintf("REQ%d", n.id)
+			var content = fmt.Sprintf("REQ%d%d", n.id, r.timestamp)
 			log.Print("node #", n.id, " , SENDING request ", content, " to node #", i)	
 			n.messages[i] <- content
 		}
@@ -88,7 +106,7 @@ func (n *Node) sendReleaseToAllOtherNodes() {
 	log.Print("node #", n.id," sendReleaseToAllOtherNodes")	
 	for i := 0; i < len(n.messages); i++ {
 		if n.id != i {
-			var content = fmt.Sprintf("REL%d", n.id)
+			var content = fmt.Sprintf("REL%d%d", n.id, n.timestamp)
 			log.Print("node #", n.id, " , SENDING release ", content, " to node #", i)	
 			n.messages[i] <- content
 		}
@@ -96,7 +114,13 @@ func (n *Node) sendReleaseToAllOtherNodes() {
 }
 
 func (n *Node) requestCS() {
-	log.Print("node #", n.id," requestCS")	
+	// log.Print("node #", n.id," requestCS")	
+	for i := 0; i < len(n.queue); i++ {
+		if (n.queue[i].id == n.id) {
+			// log.Print("node #", n.id," already waiting for CS")	
+			return
+		}
+	}
 	var r Request 
 	r.id = n.id
 	
@@ -104,12 +128,15 @@ func (n *Node) requestCS() {
 	r.timestamp = n.timestamp
 	
 	n.queue = append(n.queue, r)
-	n.sendRequestToAllOtherNodes()
-	log.Print("node #", n.id," requestCS - end")	
+	sort.Sort(ByTimestamp(n.queue))
+	log.Print(n)
+	
+	n.sendRequestToAllOtherNodes(r)
+	// log.Print("node #", n.id," requestCS - end")
 }
 
 func (n *Node) releaseCS() {
-	log.Print("node #", n.id," releaseCS")	
+	log.Print("node #", n.id," releaseCS #########################")	
 	if n.queue[0].id == n.id {
 		// remove own request from queue
 		n.queue = n.queue[1:]
@@ -119,13 +146,16 @@ func (n *Node) releaseCS() {
 	}
 }
 
+func Max(x, y int) int {
+        if x < y {
+                return y
+        }
+        return x
+}
+
 func (n *Node) waitForReplies() {	
 	log.Print("node #", n.id," waitForReplies")	
-	var replies [10]int
-	for i := 0; i < len(n.messages); i++ {
-		replies[i] = 0
-	}
-	for ;sumVector(replies) != len(n.messages) - 1; {
+	//for ;sumVector(n.replies) != len(n.messages) - 1; {
 		select {
 		case msg := <-n.messages[n.id]:
 			if (strings.Contains(msg, "REP")) {
@@ -133,41 +163,61 @@ func (n *Node) waitForReplies() {
 				if err != nil {
 					log.Fatal(err)
 				}
-				// var ts, err2 = strconv.Atoi(msg[4:])
-				// if err2 != nil {
-				// 	log.Fatal(err2)
-				// }
-				replies[requester] = 1
+				var ts, err2 = strconv.Atoi(msg[4:])
+				if err2 != nil {
+					log.Fatal(err2)
+				}
+				n.timestamp = Max(ts, n.timestamp) + 1
+				n.replies[requester] = 1
+				log.Print("node #", n.id, " , RECEIVED reply from node #", requester, n.replies)	
+
 			} else if (strings.Contains(msg, "REQ")) {
 				var requester, err = strconv.Atoi(msg[3:4])
 				if err != nil {
 					log.Fatal(err)
 				}
+				var ts, err2 = strconv.Atoi(msg[4:])
+				if err2 != nil {
+					log.Fatal(err2)
+				}
+				n.timestamp = Max(ts, n.timestamp) + 1
+
 				var content = fmt.Sprintf("REP%d%d", n.id, n.timestamp)
 				log.Print("node #", n.id, " , SENDING reply ", content, " to node #", requester)	
-				n.messages[requester] <- content
 				var r Request 
 				r.id = requester
-				r.timestamp = n.timestamp
+				//n.timestamp++
+				r.timestamp = ts //n.timestamp
 				n.queue = append(n.queue, r)
-				n.timestamp++
+				sort.Sort(ByTimestamp(n.queue))
+				log.Print(n)
+				n.messages[requester] <- content
 			} else if (strings.Contains(msg, "REL")) {
 				var requester, err = strconv.Atoi(msg[3:4])
 				if err != nil {
 					log.Fatal(err)
 				}
+				var ts, err2 = strconv.Atoi(msg[4:])
+				if err2 != nil {
+					log.Fatal(err2)
+				}
+				n.timestamp = Max(ts, n.timestamp) + 1
 				for i := 0; i < len(n.queue); i++ {
 					if n.queue[i].id == requester {
 						n.queue = append(n.queue[:i], n.queue[i+1:]...)
 					}
 				}
+				log.Print("Node #", n.id, " received release from ", requester)
+				// log.Print(n)
 
 			} else {
 				log.Fatal("WTF2")	
 			}
 		}
-	}
-	if n.queue[0].id == n.id {
+//}
+	log.Print("Node #", n.id, " got all replies")
+	log.Print(n)
+	if sumVector(n.replies) == len(n.messages) - 1 && n.queue[0].id == n.id {
 		n.enterCS()
 		n.releaseCS()
 	}
@@ -177,7 +227,7 @@ func (n *Node) LamportBakery(wg *sync.WaitGroup) {
 	log.Print("node #", n.id)
 
 	// Initialization
-	n.queue = make([]Request, 1, 100)
+	n.queue = make([]Request, 0, 100)
 
 	for i := 1; i < 10000000; i ++ {
 		time.Sleep(100 * time.Millisecond)
@@ -200,6 +250,10 @@ func main() {
 	
 	for i := 0; i < len(nodes); i++ {
 		nodes[i].id = i
+		nodes[i].timestamp = i * 10
+		for r := 0; r < len(nodes); r++ {
+			nodes[i].replies[r] = 0
+		}
 		nodes[i].channel = messages[i]
 		messages[i] = make(chan string)
 	}
