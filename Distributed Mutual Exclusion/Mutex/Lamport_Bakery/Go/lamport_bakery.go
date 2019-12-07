@@ -7,11 +7,10 @@ How-to run:
 
 Parameters:
 - Number of nodes is hardcoded in the main function
-- Number of iterations is hardcoded in NaimiTrehel function
 */ 
 
 /*
-    Go implementation of the Leslie Lamport Distributed mutual exclusion algorithm, aka the Bakery algorithm (1974)
+    Go implementation of the Leslie Lamport Distributed mutual exclusion algorithm, a.k.a. the Bakery algorithm (1974)
 
 References :
 * Leslie Lamport, Communications of the ACM 17, 8   (August 1974), 453-455.: http://lamport.azurewebsites.net/pubs/bakery.pdf
@@ -70,6 +69,7 @@ type Request struct {
 type Node struct {
 	id         int
 	timestamp  int
+	inCS       bool      
 	queue      []Request
 	replies    [4]int
 	channel    chan string
@@ -88,6 +88,7 @@ func (n *Node) String() string {
 
 func (n *Node) enterCS() {
 	log.Print("node #", n.id, " enterCS ************************************")
+	n.inCS = true
 	time.Sleep(500 * time.Millisecond)
 }
 
@@ -129,7 +130,7 @@ func (n *Node) requestCS() {
 	
 	n.queue = append(n.queue, r)
 	sort.Sort(ByTimestamp(n.queue))
-	log.Print(n)
+	// log.Print(n)
 	
 	n.sendRequestToAllOtherNodes(r)
 	// log.Print("node #", n.id," requestCS - end")
@@ -137,11 +138,21 @@ func (n *Node) requestCS() {
 
 func (n *Node) releaseCS() {
 	log.Print("node #", n.id," releaseCS #########################")	
-	if n.queue[0].id == n.id {
-		// remove own request from queue
-		n.queue = n.queue[1:]
-		n.sendReleaseToAllOtherNodes()
-	} else {
+	n.inCS = false
+	// log.Print("comparing last in queue:", n.queue[0].id, n.id )
+	var found bool = false
+	for i := 0; i < len(n.queue); i++ {
+		if n.queue[i].id == n.id {
+			// remove own request from queue
+			n.queue = append(n.queue[:i], n.queue[i+1:]...)
+			n.queue = n.queue[1:]
+			n.sendReleaseToAllOtherNodes()
+			found = true
+			log.Print("found at position #",i)
+			break
+		}
+	}
+	if found == false {
 		log.Fatal("WTF1")
 	}
 }
@@ -154,72 +165,78 @@ func Max(x, y int) int {
 }
 
 func (n *Node) waitForReplies() {	
-	log.Print("node #", n.id," waitForReplies")	
-	//for ;sumVector(n.replies) != len(n.messages) - 1; {
-		select {
-		case msg := <-n.messages[n.id]:
-			if (strings.Contains(msg, "REP")) {
-				var requester, err = strconv.Atoi(msg[3:4])
-				if err != nil {
-					log.Fatal(err)
-				}
-				var ts, err2 = strconv.Atoi(msg[4:])
-				if err2 != nil {
-					log.Fatal(err2)
-				}
-				n.timestamp = Max(ts, n.timestamp) + 1
-				n.replies[requester] = 1
-				log.Print("node #", n.id, " , RECEIVED reply from node #", requester, n.replies)	
-
-			} else if (strings.Contains(msg, "REQ")) {
-				var requester, err = strconv.Atoi(msg[3:4])
-				if err != nil {
-					log.Fatal(err)
-				}
-				var ts, err2 = strconv.Atoi(msg[4:])
-				if err2 != nil {
-					log.Fatal(err2)
-				}
-				n.timestamp = Max(ts, n.timestamp) + 1
-
-				var content = fmt.Sprintf("REP%d%d", n.id, n.timestamp)
-				log.Print("node #", n.id, " , SENDING reply ", content, " to node #", requester)	
-				var r Request 
-				r.id = requester
-				//n.timestamp++
-				r.timestamp = ts //n.timestamp
-				n.queue = append(n.queue, r)
-				sort.Sort(ByTimestamp(n.queue))
-				log.Print(n)
-				n.messages[requester] <- content
-			} else if (strings.Contains(msg, "REL")) {
-				var requester, err = strconv.Atoi(msg[3:4])
-				if err != nil {
-					log.Fatal(err)
-				}
-				var ts, err2 = strconv.Atoi(msg[4:])
-				if err2 != nil {
-					log.Fatal(err2)
-				}
-				n.timestamp = Max(ts, n.timestamp) + 1
-				for i := 0; i < len(n.queue); i++ {
-					if n.queue[i].id == requester {
-						n.queue = append(n.queue[:i], n.queue[i+1:]...)
-					}
-				}
-				log.Print("Node #", n.id, " received release from ", requester)
-				// log.Print(n)
-
-			} else {
-				log.Fatal("WTF2")	
+	// log.Print("node #", n.id," waitForReplies")	
+	select {
+	case msg := <-n.messages[n.id]:
+		if (strings.Contains(msg, "REP")) {
+			var requester, err = strconv.Atoi(msg[3:4])
+			if err != nil {
+				log.Fatal(err)
 			}
+			var ts, err2 = strconv.Atoi(msg[4:])
+			if err2 != nil {
+				log.Fatal(err2)
+			}
+			n.timestamp = Max(ts, n.timestamp) + 1
+			n.replies[requester] = 1
+			log.Print("node #", n.id, " , RECEIVED reply from node #", requester, n.replies)	
+
+		} else if (strings.Contains(msg, "REQ")) {
+			var requester, err = strconv.Atoi(msg[3:4])
+			if err != nil {
+				log.Fatal(err)
+			}
+			var ts, err2 = strconv.Atoi(msg[4:])
+			if err2 != nil {
+				log.Fatal(err2)
+			}
+			n.timestamp = Max(ts, n.timestamp) + 1
+
+			var content = fmt.Sprintf("REP%d%d", n.id, n.timestamp)
+			log.Print("node #", n.id, " , SENDING reply ", content, " to node #", requester)	
+			var r Request 
+			r.id = requester
+			//n.timestamp++
+			r.timestamp = ts //n.timestamp
+			n.queue = append(n.queue, r)
+			sort.Sort(ByTimestamp(n.queue))
+			// log.Print(n)
+			n.messages[requester] <- content
+		} else if (strings.Contains(msg, "REL")) {
+			var requester, err = strconv.Atoi(msg[3:4])
+			if err != nil {
+				log.Fatal(err)
+			}
+			var ts, err2 = strconv.Atoi(msg[4:])
+			if err2 != nil {
+				log.Fatal(err2)
+			}
+			n.timestamp = Max(ts, n.timestamp) + 1
+			for i := 0; i < len(n.queue); i++ {
+				if n.queue[i].id == requester {
+					n.queue = append(n.queue[:i], n.queue[i+1:]...)
+					// log.Print("Node #", n.id, " removed from queue: ", requester)
+				}
+			}
+			log.Print("Node #", n.id, " received release from ", requester)
+			// log.Print(n)
+
+		} else {
+			log.Fatal("WTF2")	
 		}
-//}
-	log.Print("Node #", n.id, " got all replies")
-	log.Print(n)
-	if sumVector(n.replies) == len(n.messages) - 1 && n.queue[0].id == n.id {
+	}
+	// log.Print("Node #", n.id, " got all replies")
+	// log.Print(n)
+	if sumVector(n.replies) == len(n.messages) - 1 && n.queue[0].id == n.id && n.inCS == false {
+	// if sumVector(n.replies) == len(n.messages) - 1 {
+	// 	// var found bool = false
+	// 	for i := 0; i < len(n.queue); i++ {
+	// 		if n.queue[i].id == n.id {
+				// found = true
 		n.enterCS()
 		n.releaseCS()
+		// 	}
+		// }
 	}
 }
 
@@ -250,6 +267,7 @@ func main() {
 	
 	for i := 0; i < len(nodes); i++ {
 		nodes[i].id = i
+		nodes[i].inCS = false
 		nodes[i].timestamp = i * 10
 		for r := 0; r < len(nodes); r++ {
 			nodes[i].replies[r] = 0
