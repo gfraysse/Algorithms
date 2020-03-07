@@ -7,7 +7,7 @@ How-to run:
 
 Parameters:
 - Number of nodes is hardcoded in the main function
-- Number of iterations is hardcoded in NaimiTrehel function
+- Number of iterations is hardcoded in ChandyMisra function
 */ 
 
 /*
