@@ -14,8 +14,8 @@ Terminology
 * The receiving site is every other site which is receiving a request from the requesting site.
 
 Parameters:
-- Number of nodes is hardcoded in the main function
-- Number of iterations is hardcoded in RicartAgrawala function
+- Number of nodes is set with NB_NODES global variable
+- Number of CS entries is set with NB_ITERATIONS global variable
 */ 
 
 /*
@@ -41,6 +41,8 @@ import (
 
 /* global variable declaration */
 var NB_NODES int = 4
+var NB_ITERATIONS int = 10
+var CURRENT_ITERATION int = 0
 
 /*
 // Debug function
@@ -59,7 +61,7 @@ type Node struct {
 	seqNumber             int // The sequence number chosen by a request originating at this node
 	highestSeqNumber      int // The highest sequence number seen in any REQUEST message sent or received
 	outstandingReplyCount int // The number of REPLY messages still expected
-
+	nbCS                  int // the number of time the node entered its Critical Section
 	isRequestingCS        bool // true when this node is requesting access to its critical section
 	replyDeferred         []bool // Reply_Deferred [j] is TRUE when this node is deferring a REPLY to j's REQUEST message
 	queue                 []Request
@@ -78,6 +80,8 @@ func (n *Node) String() string {
 
 func (n *Node) enterCS() {
 	log.Print("Node #", n.id, " ######################### enterCS")
+	CURRENT_ITERATION ++
+	n.nbCS ++
 	// log.Print(n)
 	time.Sleep(500 * time.Millisecond)
 }
@@ -98,7 +102,6 @@ func (n *Node) sendRequest(seqNumber int, nodeId int, destNodeId int) {
 	for i := 0; i < len(n.messages); i++ {
 		if i == destNodeId {
 			var content = fmt.Sprintf("REQ%d%d", n.id, seqNumber)
-			// log.Print(n)
 			log.Print("Node #", n.id, ", SENDING request ", content, " with seqNumber #", seqNumber, " to Node #", destNodeId)	
 			n.messages[i] <- content
 		}
@@ -113,7 +116,7 @@ func (n *Node) sendReply(destNodeId int) {
 
 func (n *Node) waitForReplies() {	
 	// log.Print("Node #", n.id," waitForReplies")	
-	for i := 1; i < 10000000; i ++ {
+	for {
 		select {
 		case msg := <-n.messages[n.id]:
 			if (strings.Contains(msg, "REQ")) {
@@ -144,28 +147,20 @@ func (n *Node) waitForReplies() {
 					log.Fatal(err)
 				}
 				log.Print("Node #", n.id, ", RECEIVED reply from Node #", sender, ",", msg)
-				n.outstandingReplyCount = n.outstandingReplyCount - 1
-				// log.Print("Node #", n.id, ", outstandingReplyCount=", n.outstandingReplyCount)
-				// if (n.outstandingReplyCount == 0) {
-				// 	n.enterCS()
-				// 	log.Print("Node #", n.id, " toto")
-				// 	break
-				// }
-
-				// log.Print(n)
+				n.outstandingReplyCount --
 			} else {
 				log.Fatal("WTF")
 			}
 		}
 	}
-	log.Print(n)
-	log.Print("Node #", n.id, " end waitForReplies")
+	// log.Print(n)
+	// log.Print("Node #", n.id, " end waitForReplies")
 }
 
 func (n *Node) requestCS() {
-	log.Print("Node #", n.id, " requestCS")
+	// log.Print("Node #", n.id, " requestCS")
 
-	for i := 1; i < 10000000; i ++ {
+	for {
 		time.Sleep(100 * time.Millisecond)
 		// Mutex on shared variable
 		n.isRequestingCS = true
@@ -195,11 +190,14 @@ func (n *Node) RicartAgrawala(wg *sync.WaitGroup) {
 
 	go n.requestCS()
 	go n.waitForReplies()
-	for i := 1; i < 10000000; i ++ {
+	for {
 		time.Sleep(100 * time.Millisecond)
+		if CURRENT_ITERATION > NB_ITERATIONS {
+			break
+		}
 	}
 
-	// log.Print("Node #", n.id," END")	
+	log.Print("Node #", n.id," END after ", NB_ITERATIONS," CS entries")	
 	wg.Done()
 }
 
@@ -213,7 +211,7 @@ func main() {
 	// Initialization
 	for i := 0; i < NB_NODES; i++ {
 		nodes[i].id = i
-		// nodes[i].state = 0 // Thinking
+		nodes[i].nbCS = 0 
 		nodes[i].seqNumber = 0
 		nodes[i].highestSeqNumber = 0
 		nodes[i].outstandingReplyCount = 0
@@ -236,6 +234,10 @@ func main() {
 		go nodes[i].RicartAgrawala(&wg)
 	}
 	wg.Wait()
+	for i := 0; i < NB_NODES; i++ {
+		log.Print("Node #", nodes[i].id," entered CS ", nodes[i].nbCS," time")	
+
+	}
 }
 /*
 Pseudo-code in Algol-like language from original paper
