@@ -2,8 +2,7 @@
   Copyright "Guillaume Fraysse <gfraysse dot spam plus code at gmail dot com>"
 
 How-to run: 
-  go build naimi-trehel.go 
-  ./naimi-trehel 2>&1 |tee /tmp/tmp.log
+  go run naimi-trehel.go 2>&1 |tee /tmp/tmp.log
 
 Parameters:
 - Number of nodes is set with NB_NODES global variable
@@ -17,7 +16,7 @@ References :
 * M. Naimi, M. Tréhel, A. Arnold, "A Log(N) Distributed Mutual Exclusion Algorithm Based on the Path Reversal", Journal of Parallel and Distributed Computing, 34, 1-13 (1996).
 * M.Tréhel, M.Naimi: "Un algorithme distribué d'exclusion mutuelle", TSI Vol 6, no 2, p. 141–150, (1987).
 * M.Naimi, M. Tréhel : "How to detect a failure and regenerate the token in the Log(n) distributed algorithm for mutual exclusion" , 2nd International Workshop on Distributed Algorithms, Amsterdam, (Juill. 1987), paru dans Lecture Notes in Computer Science, no 312, p. 149-158, édité par J. Van Leeween.
-https://fr.wikipedia.org/wiki/Algorithme_de_Naimi-Trehel
+* https://fr.wikipedia.org/wiki/Algorithme_de_Naimi-Trehel
 
 Complexity is O(Log(n))
 */
@@ -159,53 +158,7 @@ func (n *Node) waitForReplies() {
 		}
 	}	
 }
-/*
-func (n *Node) NaimiTrehel2(wg *sync.WaitGroup) {
-	log.Print("node #", n.id)
 
-	// Initialization
-	n.has_token = false
-	n.requesting = false
-	n.next = -1
-	n.last = 0
-
-	if n.last == n.id {
-		n.has_token = true
-		n.last = -1
-	} else {
-		n.has_token = false
-	}
-
-	for i := 1; i < 10000000; i ++ {
-		time.Sleep(100 * time.Millisecond)
-		if (n.requesting != true && n.has_token != true) {
-			n.requestCS()
-		} 
-		select {
-		case msg := <-n.messages[n.id]:
-			if (strings.Contains(msg, "REQ")) {
-				var requester, err = strconv.Atoi(msg[3:])
-				if err != nil {
-					log.Fatal(err)
-				}
-				n.receiveRequestCS(requester)
-				
-			} else if (strings.Contains(msg, "token")) {
-				n.receiveToken()
-				// if (n.requesting == true && n.has_token == true) {
-				// 	n.enterCS() // not explicit in paper
-				// 	n.releaseCS() // not explicit in paper
-				}
-			} else {
-				log.Fatal("WTF")	
-			}
-		}
-	}
-
-	log.Print("node #", n.id," END")	
-	wg.Done()
-}
-*/
 func (n *Node) NaimiTrehel(wg *sync.WaitGroup) {
 	log.Print("Node #", n.id)
 
