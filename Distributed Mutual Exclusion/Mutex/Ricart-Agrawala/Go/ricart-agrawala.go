@@ -236,7 +236,6 @@ func main() {
 	wg.Wait()
 	for i := 0; i < NB_NODES; i++ {
 		log.Print("Node #", nodes[i].id," entered CS ", nodes[i].nbCS," time")	
-
 	}
 }
 /*
