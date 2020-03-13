@@ -62,7 +62,6 @@ type Node struct {
 
 	isRequestingCS        bool // true when this node is requesting access to its critical section
 	replyDeferred         []bool // Reply_Deferred [j] is TRUE when this node is deferring a REPLY to j's REQUEST message
-	// state            int
 	queue                 []Request
 	channel               chan string
 	messages              []chan string
@@ -70,10 +69,8 @@ type Node struct {
 
 func (n *Node) String() string {
 	var val string
-	// val = fmt.Sprintf("Node #%d, state=%d, highestSeqNumber=%d, outstandingReplyCount=%d \n",
 	val = fmt.Sprintf("Node #%d, highestSeqNumber=%d, outstandingReplyCount=%d \n",
 		n.id,
-		// n.state,
 		n.highestSeqNumber,
 		n.outstandingReplyCount)
 	return val
@@ -81,14 +78,12 @@ func (n *Node) String() string {
 
 func (n *Node) enterCS() {
 	log.Print("Node #", n.id, " ######################### enterCS")
-	// n.state = 2 // Eating
-	// log.Print(p)
+	// log.Print(n)
 	time.Sleep(500 * time.Millisecond)
 }
 
 func (n *Node) releaseCS() {
 	log.Print("Node #", n.id," releaseCS #########################")	
-	// n.state = 0 // Thinking
 	n.isRequestingCS  = false
 	for j := 0; j < NB_NODES; j++ {
 		if (n.replyDeferred[j]) {
@@ -96,14 +91,14 @@ func (n *Node) releaseCS() {
 			n.sendReply(j)
 		}
 	}
-	// log.Print(p)
+	// log.Print(n)
 }
 
 func (n *Node) sendRequest(seqNumber int, nodeId int, destNodeId int) {
 	for i := 0; i < len(n.messages); i++ {
 		if i == destNodeId {
 			var content = fmt.Sprintf("REQ%d%d", n.id, seqNumber)
-			// log.Print(p)
+			// log.Print(n)
 			log.Print("Node #", n.id, ", SENDING request ", content, " with seqNumber #", seqNumber, " to Node #", destNodeId)	
 			n.messages[i] <- content
 		}
@@ -118,54 +113,60 @@ func (n *Node) sendReply(destNodeId int) {
 
 func (n *Node) waitForReplies() {	
 	// log.Print("Node #", n.id," waitForReplies")	
-	select {
-	case msg := <-n.messages[n.id]:
-		if (strings.Contains(msg, "REQ")) {
-			// requester is the variable j in the paper
-			var requester, err = strconv.Atoi(msg[3:4])
-			if err != nil {
-				log.Fatal(err)
-			}
-			// k is seqNumber,
-			// k is the name of the variable in the paper
-			var k, err2 = strconv.Atoi(msg[4:])
-			if err2 != nil {
-				log.Fatal(err2)
-			}
+	for i := 1; i < 10000000; i ++ {
+		select {
+		case msg := <-n.messages[n.id]:
+			if (strings.Contains(msg, "REQ")) {
+				// requester is the variable j in the paper
+				var requester, err = strconv.Atoi(msg[3:4])
+				if err != nil {
+					log.Fatal(err)
+				}
+				// k is seqNumber,
+				// k is the name of the variable in the paper
+				var k, err2 = strconv.Atoi(msg[4:])
+				if err2 != nil {
+					log.Fatal(err2)
+				}
 
-			if k > n.highestSeqNumber {
-				n.highestSeqNumber = k
-			}
-			var defer_it bool = n.isRequestingCS && ((k > n.seqNumber) || (k == n.seqNumber && requester > n.id))
-			if defer_it {
-				n.replyDeferred[requester] = true
+				if k > n.highestSeqNumber {
+					n.highestSeqNumber = k
+				}
+				var defer_it bool = n.isRequestingCS && ((k > n.seqNumber) || (k == n.seqNumber && requester > n.id))
+				if defer_it {
+					n.replyDeferred[requester] = true
+				} else {
+					n.sendReply(requester)
+				}
+			}  else if (strings.Contains(msg, "REP")) {
+				var sender, err = strconv.Atoi(msg[3:4])
+				if err != nil {
+					log.Fatal(err)
+				}
+				log.Print("Node #", n.id, ", RECEIVED reply from Node #", sender, ",", msg)
+				n.outstandingReplyCount = n.outstandingReplyCount - 1
+				// log.Print("Node #", n.id, ", outstandingReplyCount=", n.outstandingReplyCount)
+				// if (n.outstandingReplyCount == 0) {
+				// 	n.enterCS()
+				// 	log.Print("Node #", n.id, " toto")
+				// 	break
+				// }
+
+				// log.Print(n)
 			} else {
-				n.sendReply(requester)
+				log.Fatal("WTF")
 			}
-		}  else if (strings.Contains(msg, "REP")) {
-			var sender, err = strconv.Atoi(msg[3:4])
-			if err != nil {
-				log.Fatal(err)
-			}
-			log.Print("Node #", n.id, ", RECEIVED reply from Node #", sender, ",", msg)
-			n.outstandingReplyCount --
-			if (n.outstandingReplyCount == 0) {
-				n.enterCS()
-			}
-			// log.Print(p)
-		} else {
-			log.Fatal("WTF")
 		}
 	}
-	// log.Print(p)
+	log.Print(n)
+	log.Print("Node #", n.id, " end waitForReplies")
 }
 
 func (n *Node) requestCS() {
-	// log.Print("Node #", p.id, " requestCS")
+	log.Print("Node #", n.id, " requestCS")
 
 	for i := 1; i < 10000000; i ++ {
 		time.Sleep(100 * time.Millisecond)
-
 		// Mutex on shared variable
 		n.isRequestingCS = true
 		n.seqNumber = n.highestSeqNumber + 1
@@ -177,28 +178,35 @@ func (n *Node) requestCS() {
 				n.sendRequest(n.seqNumber, n.id, j)
 			}
 		}
-	}
-
-	log.Print("Node #", n.id," END")	
+		for {
+			time.Sleep(100 * time.Millisecond)
+			if (n.outstandingReplyCount == 0) {
+				n.enterCS()
+				n.releaseCS()
+				break
+			}
+		} 
+	}	
+	// log.Print("Node #", n.id," END")	
 }
 
 func (n *Node) RicartAgrawala(wg *sync.WaitGroup) {
 	log.Print("Node #", n.id)
 
+	go n.requestCS()
+	go n.waitForReplies()
 	for i := 1; i < 10000000; i ++ {
 		time.Sleep(100 * time.Millisecond)
-		go n.requestCS()
-		go n.waitForReplies()
 	}
 
-	log.Print("Node #", n.id," END")	
+	// log.Print("Node #", n.id," END")	
 	wg.Done()
 }
 
 func main() {
-	var nodes = make([]Node, NB_NODES) // [NB_NODES]Node
+	var nodes = make([]Node, NB_NODES)
 	var wg sync.WaitGroup
-	var messages = make([]chan string, NB_NODES) // [NB_NODES]chan string
+	var messages = make([]chan string, NB_NODES)
 	
 	log.Print("nb_process #", NB_NODES)
 
