@@ -6,8 +6,8 @@ How-to run:
   ./naimi-trehel 2>&1 |tee /tmp/tmp.log
 
 Parameters:
-- Number of nodes is hardcoded in the main function
-- Number of iterations is hardcoded in NaimiTrehel function
+- Number of nodes is set with NB_NODES global variable
+- Number of CS entries is set with NB_ITERATIONS global variable
 */ 
 
 /*
@@ -33,6 +33,10 @@ import (
 	"time"
 )
 
+/* global variable declaration */
+var NB_NODES int = 4
+var NB_ITERATIONS int = 10
+var CURRENT_ITERATION int = 0
 /*
 // Debug function
 func displayNodes() {
@@ -46,6 +50,7 @@ type Node struct {
 	id         int
 	has_token  bool
 	requesting bool
+	nbCS       int
 	next       int // the dynamic distributed list
 	last       int // called father in the original paper. Called last here as in Sopena et al. as it stores the last requester
 	channel    chan string
@@ -53,22 +58,14 @@ type Node struct {
 }
 
 func (n *Node) enterCS() {
-	log.Print("node #", n.id, " enterCS")
+	log.Print("Node #", n.id, " ######################### enterCS")
+	CURRENT_ITERATION ++
+	n.nbCS ++
 	time.Sleep(500 * time.Millisecond)
 }
 
-func (n *Node) requestCS() {
-	n.requesting = true
-	if n.last != -1 {
-		var content = fmt.Sprintf("REQ%d", n.id)
-		log.Print("node #", n.id, " requestCS, SENDING ", content, " to last #", n.last)				
-		n.messages[n.last] <- content
-		n.last = -1		
-	}
-}
-
 func (n *Node) releaseCS() {
-	log.Print("node #", n.id, " releaseCS")
+	log.Print("Node #", n.id," releaseCS #######################")	
 	n.requesting = false
 	if n.next != -1 {
 		var content = fmt.Sprintf("token%d", n.next)
@@ -76,6 +73,42 @@ func (n *Node) releaseCS() {
 		n.messages[n.next] <- content
 		n.has_token = false
 		n.next = -1
+	}
+}
+
+func (n *Node) requestCS() {
+	for {
+		time.Sleep(100 * time.Millisecond)
+
+		// Initialization of request
+		n.has_token = false
+		n.requesting = false
+		n.next = -1
+		n.last = 0
+
+		if n.last == n.id {
+			n.has_token = true
+			n.last = -1
+		} else {
+			n.has_token = false
+		}
+
+		n.requesting = true
+		if n.last != -1 {
+			var content = fmt.Sprintf("REQ%d", n.id)
+			log.Print("node #", n.id, " requestCS, SENDING ", content, " to last #", n.last)				
+			n.messages[n.last] <- content
+			n.last = -1		
+		}
+
+		for {
+			time.Sleep(100 * time.Millisecond)
+			if (n.requesting == true && n.has_token == true) {
+				n.enterCS() // not explicit in paper
+				n.releaseCS() // not explicit in paper
+				break
+			}
+		} 
 	}
 }
 
@@ -100,11 +133,34 @@ func (n *Node) receiveRequestCS(j int) {
 }
 
 func (n *Node) receiveToken() {
-	log.Print("****** Got TOKEN #", n.id)
+	log.Print("** Node #", n.id, " Got TOKEN **")
 	n.has_token = true
 }
 
-func (n *Node) NaimiTrehel(wg *sync.WaitGroup) {
+func (n *Node) waitForReplies() {	
+	for {
+		select {
+		case msg := <-n.messages[n.id]:
+			if (strings.Contains(msg, "REQ")) {
+				var requester, err = strconv.Atoi(msg[3:])
+				if err != nil {
+					log.Fatal(err)
+				}
+				n.receiveRequestCS(requester)
+				
+			} else if (strings.Contains(msg, "token")) {
+				n.receiveToken()
+				// if (n.requesting == true && n.has_token == true) {
+				// 	n.enterCS() // not explicit in paper
+				// 	n.releaseCS() // not explicit in paper
+			} else {
+				log.Fatal("WTF")	
+			}
+		}
+	}	
+}
+/*
+func (n *Node) NaimiTrehel2(wg *sync.WaitGroup) {
 	log.Print("node #", n.id)
 
 	// Initialization
@@ -136,9 +192,9 @@ func (n *Node) NaimiTrehel(wg *sync.WaitGroup) {
 				
 			} else if (strings.Contains(msg, "token")) {
 				n.receiveToken()
-				if (n.requesting == true && n.has_token == true) {
-					n.enterCS() // not explicit in paper
-					n.releaseCS() // not explicit in paper
+				// if (n.requesting == true && n.has_token == true) {
+				// 	n.enterCS() // not explicit in paper
+				// 	n.releaseCS() // not explicit in paper
 				}
 			} else {
 				log.Fatal("WTF")	
@@ -147,6 +203,22 @@ func (n *Node) NaimiTrehel(wg *sync.WaitGroup) {
 	}
 
 	log.Print("node #", n.id," END")	
+	wg.Done()
+}
+*/
+func (n *Node) NaimiTrehel(wg *sync.WaitGroup) {
+	log.Print("Node #", n.id)
+
+	go n.requestCS()
+	go n.waitForReplies()
+	for {
+		time.Sleep(100 * time.Millisecond)
+		if CURRENT_ITERATION > NB_ITERATIONS {
+			break
+		}
+	}
+
+	log.Print("Node #", n.id," END after ", NB_ITERATIONS," CS entries")	
 	wg.Done()
 }
 
@@ -159,6 +231,7 @@ func main() {
 	
 	for i := 0; i < len(nodes); i++ {
 		nodes[i].id = i
+		nodes[i].nbCS = 0
 		nodes[i].channel = messages[i]
 		messages[i] = make(chan string)
 	}
@@ -171,4 +244,7 @@ func main() {
 		go nodes[i].NaimiTrehel(&wg)
 	}
 	wg.Wait()
+	for i := 0; i < NB_NODES; i++ {
+		log.Print("Node #", nodes[i].id," entered CS ", nodes[i].nbCS," time")	
+	}
 }
