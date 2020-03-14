@@ -2,7 +2,7 @@
   Copyright "Guillaume Fraysse <gfraysse dot spam plus code at gmail dot com>"
 
 TODO: 
-- everything
+- define requests and update sendRequest 
 
 How-to run: 
   go run awerbuch-saks.go 2>&1 |tee /tmp/tmp.log
@@ -39,6 +39,8 @@ var NB_JOBS int = 4
 var NB_ITERATIONS int = 10
 var CURRENT_ITERATION int = 0
 
+var MAX_SLOTS = 50
+
 /*
 // Debug function
 func displayJobs() {
@@ -57,15 +59,16 @@ type Position struct {
 }
 
 type JobSet struct {
-	jobs     []Job
+	jobid    int
 	position Position
 }
 
 type Job struct {
 	// From the algorithm
 	id         int
-	compete    JobSet
+	compete    []JobSet
 	position   Position
+	positions   []Position
 	imbalance  []int
 	// Implementation specific
 	nbCS       int // the number of time the node entered its Critical Section
@@ -74,12 +77,21 @@ type Job struct {
 	messages   []chan string
 }
 
+func removeFromJobSet(slice []JobSet, i int) []JobSet {
+	for j := 0; j< len(slice); j ++{
+		if slice[j].jobid == i {
+			return append(slice[:j], slice[j+1:]...)
+		}
+	}
+    return slice
+}
+
 func (j *Job) String() string {
 	var val string
-	val = fmt.Sprintf("Job #%d, highestSeqNumber=%d, outstandingReplyCount=%d \n",
+	val = fmt.Sprintf("Job #%d Position.level=%d, Position.slot=%d\n",
 		j.id,
-		j.highestSeqNumber,
-		j.outstandingReplyCount)
+		j.position.level,
+		j.position.slot)
 	return val
 }
 
@@ -96,17 +108,30 @@ func (j *Job) releaseCS() {
 	// log.Print(n)
 }
 
-func obstructs(p1 Position, p2 Position) {
+// does p2 obstruct p1 ?
+func obstructs(p1 Position, p2 Position) bool {
+	if (p1.level == p2.level) {
+		if (p2.slot == p1.slot || p2.slot == p1.slot +1) {
+			return true
+		}
+	}
+	if (p2.level == p1.level + 1 && p2.slot == 0) {
+		return true
+	}
+	if (p1.level == p2.level + 1 && p1.slot == 0 && p2.slot > 1) {
+		return true
+	}
+	
 	return false
 }
 
-func (j *Job) schedule(compete JobSet) {
+func (j *Job) schedule(receivedCompete []JobSet) {
 	var L int = 0
-	for i := 0; i < len(j.compete); i ++ {
-		j.compete[j].position.level = 0
-		j.compete[j].position.slot = 0
-		if j.compete[j].position.level + 1 > L {
-			L = j.compete[j].position.level + 1
+	for i := 0; i < len(receivedCompete); i ++ {
+		j.compete[receivedCompete[i].jobid].position.level = 0		
+		j.compete[receivedCompete[i].jobid].position.slot = MAX_SLOTS
+		if receivedCompete[i].position.level + 1 > L {
+			L = receivedCompete[i].position.level + 1
 		}
 	}
 	j.position.level = L
@@ -121,6 +146,49 @@ func (j *Job) done() {
 }
 
 func (j *Job) report(k int, P Position) {
+	var jk JobSet
+	jk.jobid = k
+	j.compete = append (j.compete, jk)
+	j.imbalance[k] --
+	j.position = P
+	if (j.imbalance[k] == 0) {
+		if (P.level == 0 && P.slot == -1) {
+			removeFromJobSet (j.compete, k)
+			for i := 0; i < len(j.compete); i ++ {
+				if(j.imbalance[i] <= 0 && j.position.level > 0 && j.position.slot > 0) {
+					j.advance()
+					j.rebalance()
+					j.announce()
+				}
+			}
+		}
+	} else {
+		j.imbalance[k] = -1
+		if (P.level == j.position.level && P.slot != j.position.slot + 1) || (j.position.slot == 0 && P.level == j.position.level + 1) {
+			j.inform(k)
+		}
+	}
+}
+
+func inSlice (slice []int, v int) bool {
+	for i := 0; i < len(slice); i ++ {
+		if slice[i] == v {
+			return true
+		}
+	}
+	return false
+}
+
+func minIntersect(s1 []int, s2 []int) int {
+	var min int = MAX_SLOTS
+	for i := 0; i < len(s1); i ++ {
+		if inSlice(s2, s1[i]) {
+			if s1[i] < min {
+				min = s1[i]
+			}
+		}
+	}
+	return min
 }
 
 func (j *Job) advance() {
@@ -128,54 +196,84 @@ func (j *Job) advance() {
 		j.position.slot --
 	} else {
 		j.position.level --
-		j.proper = 0
-		j.same = 0
-		j.filled = 0
-		j.free = 0
-		j.position.slot = minFreeAndProper(j)
+
+		var s string = fmt.Sprintf("%b", j.id)
+		var bit int = int(s[j.position.level] - '0')
+		var n int = (bit * 2) % 4
+		var proper []int
+		for i := 0; i  < MAX_SLOTS; i ++ {
+			if i % n == 0{
+				proper = append(proper, i)
+			}
+		}
+		var same []int
+		var filled []int
+		// var minFilled int = MAX_SLOTS + 1
+		// var maxFilled int = 0
+		for i := 0; i < len(j.compete); i ++ {
+			if j.compete[i].position.level == j.position.level {
+				same = append(same, j.compete[i].jobid)
+				filled = append(filled, j.compete[i].position.slot)
+				// if j.compete[i].slot > maxFilled {
+				// 	maxFilled = j.compete[i].slot
+				// }
+				// if j.compete[i].slot < minFilled {
+				// 	minFilled = j.compete[i].slot
+				// }
+			}
+		}
+
+		var free []int
+		for i := 0; i <= MAX_SLOTS; i ++ {
+			if !inSlice(filled, i) && !inSlice(filled, i + 1) {
+				free = append(free, i)
+			}
+		}
+		
+		j.position.slot = minIntersect(free, proper)
 	}
 }
 
 func (j *Job) rebalance() {
 	for i := 0; i < len(j.compete); i ++ {
-		k = j.compete[i]
-		if imbalance(k) == -1 {
-			inform(k)
+		var k JobSet = j.compete[i]
+		if j.imbalance[k.jobid] == -1 {
+			j.inform(k.jobid)
 		}
 	}
 }
 
+func (j *Job) sendExecute() {
+	// to myself ... so nothing to do but enter
+	j.enterCS()
+	j.releaseCS()	
+}
+
 func (j *Job) announce() {
 	if j.position.level == 0 && j.position.slot == 0 {
-		sendExecute()		
+		j.sendExecute()
 	} else {
 		for i := 0; i < len(j.compete); i ++ {
 			if obstructs(j.position, j.compete[i].position) {
-				inform(j.compete[i])
+				j.inform(j.compete[i].jobid)
 			}
 		}
 	}
 }
 
 func (j *Job) inform(k int) {
-	sendReport(k, j.id, j.position)
+	j.sendReport(k, j.id, j.position)
 	j.imbalance[k] ++
 }
 
-func (j *Job) sendReport(k int, jobId int, position int) {
+func (j *Job) sendReport(k int, jobId int, position Position) {
 	for i := 0; i < len(j.messages); i++ {
 		if i == k {
-			var content = fmt.Sprintf("REP%d%d", j.id, position)
-			log.Print("Job #", j.id, ",  REPORT ", content, " with position #", position, " to Job #", k)	
+			var content = fmt.Sprintf("REP%d%d%d", j.id, position.level, position.slot)
+			log.Print("Job #", j.id, ",  REPORT ", content, " with position #", position.level, ".", position.slot, " to Job #", k)	
 			j.messages[i] <- content
 		}
 	}
-}
-
-func (j *Job) sendReply(destJobId int) {
-	var content = fmt.Sprintf("REP%d", j.id)
-	log.Print("Job #", j.id, ", SENDING reply ", content, " to Job #", destJobId)	
-	j.messages[destJobId] <- content
 }
 
 func (j *Job) waitForReplies() {	
@@ -196,22 +294,20 @@ func (j *Job) waitForReplies() {
 					log.Fatal(err2)
 				}
 
-				if k > j.highestSeqNumber {
-					j.highestSeqNumber = k
-				}
-				var defer_it bool = j.isRequestingCS && ((k > j.seqNumber) || (k == j.seqNumber && requester > j.id))
-				if defer_it {
-					j.replyDeferred[requester] = true
-				} else {
-					j.sendReply(requester)
-				}
 			}  else if (strings.Contains(msg, "REP")) {
 				var sender, err = strconv.Atoi(msg[3:4])
 				if err != nil {
 					log.Fatal(err)
 				}
-				log.Print("Job #", j.id, ", RECEIVED reply from Job #", sender, ",", msg)
-				j.outstandingReplyCount --
+				var level, err2 = strconv.Atoi(msg[4:5])
+				if err2 != nil {
+					log.Fatal(err)
+				}
+				var slot, err3 = strconv.Atoi(msg[5:6])
+				if err3 != nil {
+					log.Fatal(err)
+				}
+				log.Print("Job #", j.id, ", RECEIVED report from Job #", sender, ",", msg)
 			} else {
 				log.Fatal("WTF")
 			}
@@ -221,29 +317,34 @@ func (j *Job) waitForReplies() {
 	// log.Print("Job #", j.id, " end waitForReplies")
 }
 
+func (j *Job) sendRequest(seqNumber int, jobId int, job Job) {
+	// for i := 0; i < len(j.messages); i++ {
+	// 	if i == jobId {
+	// 		var content = fmt.Sprintf("REP%d%d%d", j.id, position.level, position.slot)
+	// 		log.Print("Job #", j.id, ",  REPORT ", content, " with position #", position.level, ".", position.slot, " to Job #", k)	
+	// 		j.messages[i] <- content
+	// 	}
+	// }
+}
+
 func (j *Job) requestCS() {
 	// log.Print("Job #", j.id, " requestCS")
 
 	for {
 		time.Sleep(100 * time.Millisecond)
-		// Mutex on shared variable
-		j.isRequestingCS = true
-		j.seqNumber = j.highestSeqNumber + 1
-		// end mutex on shared variable
-		j.outstandingReplyCount = NB_JOBS - 1
 
-		for j := 0; j < NB_JOBS; j ++ {
-			if (j != j.id) {
-				j.sendRequest(j.seqNumber, j.id, j)
+		for i := 0; i < NB_JOBS; i ++ {
+			if (i != j.id) {
+				// j.sendRequest(j.seqNumber, j.id, j)
 			}
 		}
 		for {
 			time.Sleep(100 * time.Millisecond)
-			if (j.outstandingReplyCount == 0) {
-				j.enterCS()
-				j.releaseCS()
-				break
-			}
+			// if (j.outstandingReplyCount == 0) {
+			// 	j.enterCS()
+			// 	j.releaseCS()
+			// 	break
+			// }
 		} 
 	}	
 	// log.Print("Job #", j.id," END")	
