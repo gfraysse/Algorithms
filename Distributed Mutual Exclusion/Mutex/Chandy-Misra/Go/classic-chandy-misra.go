@@ -32,11 +32,11 @@ import (
 )
 
 /* global variable declaration */
-var NB_NODES int = 4
-var NB_ITERATIONS int = 10
+var NB_NODES int          = 4
+var NB_ITERATIONS int     = 10
 var CURRENT_ITERATION int = 0
-var STATE_THINKING int = 0
-var STATE_EATING int = 2
+var STATE_THINKING int    = 0
+var STATE_EATING int      = 2
 
 /*
 // Debug function
@@ -210,7 +210,7 @@ func (p *Philosopher) requestCS() {
 		}
 		if (p.secondForkStatus == false && p.secondForkRequested != true) {
 			p.secondForkRequested = true
-			if (p.id != 3) {
+			if (p.id != NB_NODES - 1) {
 				p.requestFork(p.id + 1, p.secondForkId)
 			} else {
 				p.requestFork(0, p.secondForkId)
@@ -290,7 +290,7 @@ func main() {
 		philosophers[i].secondForkClean  = false
 		philosophers[i].secondForkRequested = false
 
-		// Break the symetry of the initialization otherwise the system can deadlock at startup
+		// Break the symmetry of the initialization otherwise the system can deadlock at startup
 		if (i == NB_NODES - 1) {
 			philosophers[i].secondForkStatus = true
 		} else if (i == 0) {
