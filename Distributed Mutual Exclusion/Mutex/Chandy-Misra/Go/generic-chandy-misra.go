@@ -25,6 +25,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"math/rand"
 	"sync"
 	"strings"
 	"strconv"
@@ -32,9 +33,9 @@ import (
 )
 
 /* global variable declaration */
-var NB_NODES          int = 4
+var NB_NODES          int = 9
 var NB_MSG            int = 0
-var NB_ITERATIONS     int = 10
+var NB_ITERATIONS     int = 100
 var CURRENT_ITERATION int = 0
 
 var STATE_THINKING    int = 0
@@ -48,7 +49,7 @@ var philosophers []Philosopher
 func displayNodes() {
 	for i := 0; i < NB_NODES; i++ {
 		for j := 0; j < NB_NODES - 1; j++ {
-			log.Print("  P#", philosophers[i].id, ", fork #", philosophers[i].forkId[j], ", status=", philosophers[i].forkStatus[j])
+			log.Print("  P#", philosophers[i].id, ", fork #", philosophers[i].forkId[j], ", status=", philosophers[i].forkStatus[j], ", clean=", philosophers[i].forkClean[j])
 		}
 	}
 }
@@ -82,7 +83,6 @@ type Philosopher struct {
 	forkId           []int
 	forkClean        []bool
 	forkStatus       []bool
-	forkRequestToken []bool
 	state           int
 	nbCS            int
 	queue           []Request
@@ -189,7 +189,6 @@ func (p *Philosopher) waitForReplies() {
 					if (sender == p.forkId[i]) {
 						p.forkStatus[i]    = true
 						p.forkClean[i]     = true
-						p.forkRequestToken[i] = true
 						break
 					}
 				}
@@ -204,53 +203,65 @@ func (p *Philosopher) requestCS() {
 	log.Print("Philosopher #", p.id, " requestCS")
 
 	for {
-		p.state = STATE_HUNGRY
 		time.Sleep(100 * time.Millisecond)
-		
-		for j := 0; j < NB_NODES - 1; j++ {
-			if p.forkStatus[j] == false && p.forkRequestToken[j] == true {
-				p.forkRequestToken[j] = false
-				p.requestFork(p.forkId[j])
-				break
+		if p.state == STATE_THINKING {
+			rand.Seed(time.Now().UnixNano())
+			var proba int = rand.Intn(2)
+			// log.Print("Proba =", proba)
+			if proba < 1 {
+				p.state = STATE_HUNGRY
+				log.Print("Philosopher #", p.id, " wants to enter CS")
+				for j := 0; j < NB_NODES - 1; j++ {
+					if p.forkStatus[j] == false {
+						p.requestFork(p.forkId[j])
+					} else {
+						p.forkClean[j] = true
+					}
+				}
 			} else {
-				p.forkClean[j] = true
+				// log.Print("Philosopher #", p.id, " DOES NOT want to enter CS")
 			}
-		}
-		var allGreen = true
+		} else if p.state == STATE_HUNGRY {
+			var allGreen = true
 
-		for i := 0; i < NB_NODES - 1; i ++ {
-			allGreen = allGreen && p.forkStatus[i] && p.forkClean[i]
-			if allGreen == false {
-				break
+			for i := 0; i < NB_NODES - 1; i ++ {
+				allGreen = allGreen && p.forkStatus[i] && p.forkClean[i]
+				if allGreen == false {
+					// log.Print("Philosopher #", p.id, " waiting for fork", p.forkId[i])
+					// displayNodes()
+					break
+				}
 			}
-		}
-		if (allGreen == true) {
-			if (p.state == STATE_EATING) {
-				log.Print("** Philosopher #", p.id, " is already eating **")
-			} else {
-				p.enterCS()
-				p.releaseCS()
-				for i := 0; i < len(p.queue); i++ {
-					var r Request
-					r = p.queue[i]
-					for j := 0; j < NB_NODES - 1; j++ {
-						if (r.philosopherId == p.forkId[j] && p.forkStatus[j] == true) {
-							p.forkStatus[j] = false
-							p.forkRequestToken[j] = true
-							p.sendFork(r.philosopherId)
-							break
+			if (allGreen == true) {
+				if (p.state == STATE_EATING) {
+					log.Print("** Philosopher #", p.id, " is already eating **")
+				} else {
+					p.enterCS()
+					p.releaseCS()
+					for i := 0; i < len(p.queue); i++ {
+						var r Request
+						r = p.queue[i]
+						for j := 0; j < NB_NODES - 1; j++ {
+							if (r.philosopherId == p.forkId[j] && p.forkStatus[j] == true) {
+								p.forkStatus[j] = false
+								p.sendFork(r.philosopherId)
+								break
+							}
 						}
 					}
-				}
-				p.queue = nil
-				for j := 0; j < NB_NODES - 1; j++ {
-					if (p.forkStatus[j] == true) {
-						p.forkStatus[j] = false
-						p.forkRequestToken[j] = true
-						p.sendFork(p.forkId[j])
+					p.queue = nil
+					/*
+					for j := 0; j < NB_NODES - 1; j++ {
+						if (p.forkStatus[j] == true) {
+							p.forkStatus[j] = false
+							p.sendFork(p.forkId[j])
+						}
 					}
+*/
 				}
 			}
+		} else {
+			log.Print("already thinking")
 		}
 	}
 
@@ -288,7 +299,6 @@ func main() {
 		philosophers[i].forkId  = make([]int, NB_NODES - 1)
 		philosophers[i].forkStatus  = make([]bool, NB_NODES - 1)
 		philosophers[i].forkClean  = make([]bool, NB_NODES - 1)
-		philosophers[i].forkRequestToken  = make([]bool, NB_NODES - 1)
 		var idx int = 0
 		for j := 0; j < NB_NODES; j++ {
 			if j == philosophers[i].id {
@@ -304,10 +314,8 @@ func main() {
 		for j := 0; j < NB_NODES - 1; j++ {
 			if philosophers[i].forkId[j] < i {
 				philosophers[i].forkStatus[j]    = false
-				philosophers[i].forkRequestToken[j] = true
 			} else {
 				philosophers[i].forkStatus[j]    = true
-				philosophers[i].forkRequestToken[j] = false
 			}
 			philosophers[i].forkClean[j]     = false
 		}
