@@ -33,9 +33,9 @@ import (
 )
 
 /* global variable declaration */
-var NB_NODES          int = 9
+var NB_NODES          int = 44
 var NB_MSG            int = 0
-var NB_ITERATIONS     int = 100
+var NB_ITERATIONS     int = 500
 var CURRENT_ITERATION int = 0
 
 var STATE_THINKING    int = 0
@@ -78,11 +78,11 @@ type Request struct {
 }
 
 type Philosopher struct {
-	id                 int
-	initialized        bool
-	forkId           []int
-	forkClean        []bool
-	forkStatus       []bool
+	id              int
+	initialized     bool
+	forkId          []int
+	forkClean       []bool
+	forkStatus      []bool
 	state           int
 	nbCS            int
 	queue           []Request
@@ -128,9 +128,9 @@ func (p *Philosopher) releaseCS() {
 func (p *Philosopher) requestFork(philosopherId int) {
 	for i := 0; i < len(p.messages); i++ {
 		if i == philosopherId {
-			var content = fmt.Sprintf("REQ%d%d", p.id)
+			var content = fmt.Sprintf("REQ%.2d", p.id)
 			// log.Print(p)
-			// log.Print("Philosopher #", p.id, ", SENDING request ", content, " for fork#", forkId, " to Philosopher #", i)	
+ 			// log.Print("Philosopher #", p.id, ", SENDING request ", content, " to Philosopher #", i)	
 			log.Print(p.id, " --", i, "--> ", i)	
 			p.messages[i] <- content
 			NB_MSG ++
@@ -141,8 +141,8 @@ func (p *Philosopher) requestFork(philosopherId int) {
 func (p *Philosopher) sendFork(philosopherId int) {
 	for i := 0; i < len(p.messages); i++ {
 		if i == philosopherId {
-			var content = fmt.Sprintf("REP%d", p.id)
-			// log.Print("Philosopher #", p.id, ", SENDING fork ", content, " with fork#", forkId," to Philosopher #", philosopherId)	
+			var content = fmt.Sprintf("REP%.2d", p.id)
+			// log.Print("Philosopher #", p.id, ", SENDING fork ", content, " to Philosopher #", philosopherId)	
 			log.Print(p.id,": ", p.id, " ====> ", philosopherId)	
 			p.messages[i] <- content
 			NB_MSG ++
@@ -157,29 +157,33 @@ func (p *Philosopher) waitForReplies() {
 		case msg := <-p.messages[p.id]:
 			checkSanity()
 			if (strings.Contains(msg, "REQ")) {
-				var requester, err = strconv.Atoi(msg[3:4])
+				var requester, err = strconv.Atoi(msg[3:5])
 				if err != nil {
 					log.Fatal(err)
 				}
 				for i := 0; i < NB_NODES - 1; i ++ {
 					if requester == p.forkId[i] {
-						if p.forkClean[i] == true && p.forkStatus[i] == true {
-							// keep the fork
-							log.Print("Philosopher #", p.id,", fork#", i, " is clean, I keep it for now")
-							var r Request
-							r.philosopherId = requester
-							r.forkId        = requester
-							p.queue         = append(p.queue, r)
+						if p.forkStatus[i] == true {
+							if p.forkClean[i] == true {
+								// keep the fork
+								log.Print("Philosopher #", p.id,", fork#", i, " is clean, I keep it for now")
+								var r Request
+								r.philosopherId = requester
+								r.forkId        = requester
+								p.queue         = append(p.queue, r)
+							} else {
+								p.forkStatus[i]    = false
+								p.forkStatus[i]    = false
+								p.sendFork(requester)
+							}						
+							break
 						} else {
-							p.forkStatus[i]    = false
-							p.forkStatus[i]    = false
-							p.sendFork(requester)
-						}						
-						break							
+							log.Print("Philosopher #", p.id,", DOES NOT own fork#", i)
+						}
 					}
 				}
 			}  else if (strings.Contains(msg, "REP")) {
-				var sender, err = strconv.Atoi(msg[3:4])
+				var sender, err = strconv.Atoi(msg[3:5])
 				if err != nil {
 					log.Fatal(err)
 				}
@@ -192,6 +196,19 @@ func (p *Philosopher) waitForReplies() {
 						break
 					}
 				}
+				var hasSentReq bool = false
+				log.Print("Philosopher #", p.id, ", checking if forks are missing")
+				for j := 0; j < NB_NODES - 1; j++ {
+					if p.forkStatus[j] == false {
+						p.requestFork(p.forkId[j])
+						hasSentReq = true
+						break
+					}
+				}
+				if hasSentReq == false {
+					log.Print("Philosopher #", p.id, ", has not requested any fork")
+				}
+					
 			} else {
 				log.Fatal("WTF")
 			}
@@ -214,6 +231,7 @@ func (p *Philosopher) requestCS() {
 				for j := 0; j < NB_NODES - 1; j++ {
 					if p.forkStatus[j] == false {
 						p.requestFork(p.forkId[j])
+						break
 					} else {
 						p.forkClean[j] = true
 					}
@@ -250,14 +268,12 @@ func (p *Philosopher) requestCS() {
 						}
 					}
 					p.queue = nil
-					/*
 					for j := 0; j < NB_NODES - 1; j++ {
 						if (p.forkStatus[j] == true) {
 							p.forkStatus[j] = false
 							p.sendFork(p.forkId[j])
 						}
 					}
-*/
 				}
 			}
 		} else {

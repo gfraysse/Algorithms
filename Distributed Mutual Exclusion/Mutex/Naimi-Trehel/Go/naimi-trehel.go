@@ -34,7 +34,7 @@ import (
 
 /* global variable declaration */
 var NB_NODES int = 4
-var NB_ITERATIONS int = 10
+var NB_ITERATIONS int = 50
 var CURRENT_ITERATION int = 0
 /*
 // Debug function
