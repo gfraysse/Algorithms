@@ -52,7 +52,6 @@ type Node struct {
 	nbCS       int
 	next       int // the dynamic distributed list
 	last       int // called father in the original paper. Called last here as in Sopena et al. as it stores the last requester
-	channel    chan string
 	messages   [4]chan string
 }
 
@@ -185,7 +184,6 @@ func main() {
 	for i := 0; i < len(nodes); i++ {
 		nodes[i].id = i
 		nodes[i].nbCS = 0
-		nodes[i].channel = messages[i]
 		messages[i] = make(chan string)
 	}
 	for i := 0; i < len(nodes); i++ {

@@ -8,7 +8,7 @@ Terminology
 * A scheduler is any computing device which runs the Dijkstra's incremental algorithm
 
 Parameters:
-- Number of jobs is set with NB_JOBS global variable
+- Number of nodes is set with NB_NODES global variable
 - Number of CS entries is set with NB_ITERATIONS global variable
 */ 
 
@@ -30,7 +30,7 @@ import (
 )
 
 /* global variable declaration */
-var NB_JOBS           int = 4
+var NB_NODES           int = 4
 var REQUEST_SIZE      int = 2
 var NB_ITERATIONS     int = 10
 var CURRENT_ITERATION int = 0
@@ -45,21 +45,20 @@ var FREE_TYPE  int = 2
 
 /*
 // Debug function
-func displayJobs() {
-	for i := 0; i < len(jobs); i++ {
-		log.Print("Job #", jobs[i].id, ", last=", jobs[i].last, ", next=", jobs[i].next)
+func displayNodes() {
+	for i := 0; i < len(nodes); i++ {
+		log.Print("Node #", nodes[i].id, ", last=", nodes[i].last, ", next=", nodes[i].next)
 	}
 }
 */
 type Request struct {
-	requesterJobId int
+	requesterNodeId int
 	requestId      int
 	messageType    int
-	requester      int
 	resourceId     []int
 }
 
-type Job struct {
+type Node struct {
 	// From the algorithm
 	id              int
 	replyReceived   []bool
@@ -67,61 +66,51 @@ type Job struct {
 	pendingRequests []Request
 	// Implementation specific
 	nbCS          int // the number of time the node entered its Critical Section
-	channel       chan []byte
 	messages      []chan []byte
 }
 
 
-func (job *Job) String() string {
+func (node *Node) String() string {
 	var val string
-	val = fmt.Sprintf("Job #%d\n",
-		job.id)
+	val = fmt.Sprintf("Node #%d\n",
+		node.id)
 	return val
 }
 
-func (job *Job) enterCS() {
-	log.Print("Job #", job.id, " ######################### enterCS")
+func (node *Node) enterCS() {
+	log.Print("Node #", node.id, " ######################### enterCS")
 	CURRENT_ITERATION ++
-	job.nbCS ++
+	node.nbCS ++
 	// log.Print(n)
 	time.Sleep(500 * time.Millisecond)
 }
 
-func (job *Job) releaseCS() {
-	log.Print("Job #", job.id," releaseCS #########################")
+func (node *Node) releaseCS() {
+	log.Print("Node #", node.id," releaseCS #########################")
 	// log.Print(n)
 }
 
-
-func (job *Job) sendExecute() {
-	// to myself ... so nothing to do but enter
-	job.enterCS()
-	job.releaseCS()	
-}
-
 func UnmarshalRequest(text []byte, request *Request) error {
-	request.requesterJobId = int(text[0])
+	request.requesterNodeId = int(text[0])
 	request.requestId      = int(text[1])
 	request.messageType    = int(text[2])
-	request.requester      = int(text[3])
 	request.resourceId = make ([]int, REQUEST_SIZE)
 	
 	for i := 0; i < REQUEST_SIZE; i++ {
-		request.resourceId[i] = int(text[4 + i])
+		request.resourceId[i] = int(text[3 + i])
 	}
 	
 	return nil
 }
 
 func MarshalRequest(request Request) ([]byte, error) {
-	var ret = make ([]byte, 4 + REQUEST_SIZE)
+	var ret = make ([]byte, 3 + REQUEST_SIZE)
 
-	ret[0] = byte(request.requesterJobId)
+	ret[0] = byte(request.requesterNodeId)
 	ret[1] = byte(request.requestId)
 	ret[2] = byte(request.messageType)
-	ret[3] = byte(request.requester)
 	for i := 0; i < REQUEST_SIZE; i++ {
-		ret[4 + i] = byte(request.resourceId[i])
+		ret[3 + i] = byte(request.resourceId[i])
 	}
 	return ret, nil
 }
@@ -137,53 +126,66 @@ func getNextResourceForReq(request Request, current int) int {
 	return next
 }
 
-func (job *Job) waitForReplies() {	
-	// log.Print("Job #", job.id," waitForReplies")	
+func (node *Node) waitForReplies() {	
+	// log.Print("Node #", node.id," waitForReplies")	
 	for {
 		select {
-		case msg := <-job.messages[job.id]:
+		case msg := <-node.messages[node.id]:
 			var request Request
 			err := UnmarshalRequest(msg, &request)
 			if err != nil {
 				log.Fatal(err)
 			}			
 			if (request.messageType == REQ_TYPE) {
-				// var requester = request.requester
-				// var res = request.resourceId
-				// log.Print("Job #", job.id, ", Requester #", requester, ", nb of res:", len(res))
-				if job.resourcePresent == true {
-					var next_res = getNextResourceForReq(request, job.id)
+				var requester = request.requesterNodeId
+				var res = request.resourceId
+				log.Print("Node #", node.id, "<-REQ#", request.requestId, ", Requester #", requester, ", nb of res:", len(res))
+				if node.resourcePresent == true {
+					node.resourcePresent = false
+					// log.Print("Node #", node.id, ", Resource available, replying")
+					var next_res = getNextResourceForReq(request, node.id)
 					if next_res == NO_NEXT {
+						log.Print("Node #", node.id, "                               with an ack")
 						var ack Request = request
 						ack.messageType = REP_TYPE
-						job.sendAck(ack)
+						// Messages are sent in a different subroutine
+						go node.sendAck(ack)
 					} else {
-						job.sendRequest(request, next_res)
+						log.Print("Node #", node.id, "                               forwarding to next req #", next_res)
+						// Messages are sent in a different subroutine
+						go node.sendRequest(request, next_res)
 					}
 				} else {
-					log.Print("Job #", job.id, "Resource not available, appending request to pendinglist")
-					job.pendingRequests = append(job.pendingRequests, request)
+					log.Print("Node #", node.id, ", Resource NOT available, appending request to pendinglist")
+					node.pendingRequests = append(node.pendingRequests, request)
 				}
 
 			}  else if (request.messageType == REP_TYPE) {
-				var requester = request.requester
-				log.Print("Job #", job.id, ", received REPLY for REQ#", request.requestId, ", requester =", requester, ",", msg)
-				job.replyReceived[request.requestId] = true
+				var requester = request.requesterNodeId
+				log.Print("Node #", node.id, "<- REPLY for REQ#", request.requestId, ", requester =", requester, ",", msg)
+				node.replyReceived[request.requestId] = true
 			}  else if (request.messageType == FREE_TYPE) {
-				var requester = request.requester
-				log.Print("Job #", job.id, ", received FREE for REQ#", request.requestId, ", requester =", requester, ",", msg)
-				job.resourcePresent = true
-				var r Request = job.pendingRequests[0]
-				job.pendingRequests = job.pendingRequests[1:]
+				var requester = request.requesterNodeId
+				log.Print("Node #", node.id, "<- FREE for REQ#", request.requestId, ", requester =", requester, ",", msg)
+				node.resourcePresent = true
+				// log.Print(len(node.pendingRequests), " pending requests on node#", node.id)
+				
+				if len(node.pendingRequests) > 0 {
+					var r Request = node.pendingRequests[0]
+					node.pendingRequests = node.pendingRequests[1:]
 
-				var next_res = getNextResourceForReq(r, job.id)
-				log.Print("next_res=", next_res)
-				if next_res == NO_NEXT {
-					var ack Request = r
-					ack.messageType = REP_TYPE
-					job.sendAck(ack)
-				} else {
-					job.sendRequest(r, next_res)
+					log.Print("Node #", node.id, ", Continuing REQ#", r.requestId)
+					var next_res = getNextResourceForReq(r, node.id)
+					// log.Print("next_res=", next_res)
+					if next_res == NO_NEXT {
+						var ack Request = r
+						ack.messageType = REP_TYPE
+						// Messages are sent in a different subroutine
+						go node.sendAck(ack)
+					} else {
+						// Messages are sent in a different subroutine
+						go node.sendRequest(r, next_res)
+					}
 				}
 
 			} else {
@@ -192,10 +194,10 @@ func (job *Job) waitForReplies() {
 		}
 	}
 	// log.Print(n)
-	// log.Print("Job #", job.id, " end waitForReplies")
+	// log.Print("Node #", node.id, " end waitForReplies")
 }
 
-func (job *Job) freeResources(r Request) {
+func (node *Node) freeResources(r Request) {
 	var freeRequest Request = r
 	freeRequest.messageType = FREE_TYPE
 	content, err := MarshalRequest(freeRequest)
@@ -203,93 +205,88 @@ func (job *Job) freeResources(r Request) {
 		log.Fatal(err)
 	}			
 	for i := 0; i < REQUEST_SIZE; i++ {
-		log.Print("Job #", job.id, ",  FREE #", r.requestId, ":", content, " for resources #", r.resourceId[0], ", #", r.resourceId[1], " to Job #", r.resourceId[i])	
-		job.messages[r.resourceId[i]] <- content		
+		log.Print("Node #", node.id, ",  FREE #", r.requestId, ":", content, " for resources #", r.resourceId[0], ", #", r.resourceId[1], " to Node #", r.resourceId[i])	
+		node.messages[r.resourceId[i]] <- content		
 	}
 }
 
-func (job *Job) sendAck(r Request) {
+func (node *Node) sendAck(r Request) {
 	content, err := MarshalRequest(r)
 	if err != nil {
 		log.Fatal(err)
 	}			
-	// var content = fmt.Sprintf("REQ%d%d%d", job.id, request.resourceId[0], request.resourceId[1])
-	log.Print("Job #", job.id, ",  REPLY#", r.requestId, ":", content, " for resources #", r.resourceId[0], ", #", r.resourceId[1], " to Job #", r.requester)	
-	job.messages[r.requester] <- content
+	// var content = fmt.Sprintf("REQ%d%d%d", node.id, request.resourceId[0], request.resourceId[1])
+	log.Print("Node #", node.id, ",  REPLY#", r.requestId, ":", content, " for resources #", r.resourceId[0], ", #", r.resourceId[1], " to Node #", r.requesterNodeId)	
+	node.messages[r.requesterNodeId] <- content
 }
 
-func (job *Job) sendRequest(request Request, destination int) {
+func (node *Node) sendRequest(request Request, destination int) {
 	content, err := MarshalRequest(request)
 	if err != nil {
 		log.Fatal(err)
 	}			
-	// var content = fmt.Sprintf("REQ%d%d%d", job.id, request.resourceId[0], request.resourceId[1])
-	log.Print("Job #", job.id, ",  REQUEST #", request.requestId, ":", content, " for resources #", request.resourceId[0], ", #", request.resourceId[1], " to Job #", destination)	
-	job.messages[destination] <- content
+	// var content = fmt.Sprintf("REQ%d%d%d", node.id, request.resourceId[0], request.resourceId[1])
+	log.Print("Node #", node.id, ",  REQUEST #", request.requestId, ":", content, " for resources #", request.resourceId[0], ", #", request.resourceId[1], " to Node #", destination)	
+	node.messages[destination] <- content
 }
 
-func (job *Job) requestCS() {
-	// log.Print("Job #", job.id, " requestCS")
+func (node *Node) requestCS() {
+	// log.Print("Node #", node.id, " requestCS")
 
 	for {
 		time.Sleep(100 * time.Millisecond)
 
 		var request Request
-		for i := 0; i < NB_JOBS; i ++ {
-			if (i != job.id) {
-				request.requesterJobId = job.id
-				request.requestId = REQUEST_ID
-				REQUEST_ID += 1
-				request.requester = job.id
-				job.replyReceived[request.requestId] = false
+		request.requesterNodeId = node.id
+		request.requestId = REQUEST_ID
+		REQUEST_ID += 1
+		node.replyReceived[request.requestId] = false
 				
-				var resources = make([]int, NB_JOBS)
-				request.resourceId = make([]int, REQUEST_SIZE)
-				// initialize a resources array with all
-				// resources id, when selecting randomly
-				// a resource we just remove it from the
-				// array so that the array alsways contains
-				// available resources
-				for j := 0; j < NB_JOBS; j++ {
-					resources[j] = j
-				}
-				var destination int = 0
-				for k := 0; k < REQUEST_SIZE; k++ {
-					rand.Seed(time.Now().UnixNano())
-					var idx int = rand.Intn(len(resources))
-					request.resourceId[k] = resources[idx]
-					if resources[idx] > destination {
-						destination = resources[idx]
-					}
-					// remove element from array to avoid requesting it twice
-					// changes order, but who cares ?
-					resources[idx] = resources[len(resources) - 1]
-					resources[len(resources) - 1] = 0 
-					resources = resources[:len(resources) - 1]
-				}
-				job.sendRequest(request, destination)
-				break
-			}
+		var resources = make([]int, NB_NODES)
+		request.resourceId = make([]int, REQUEST_SIZE)
+		// initialize a resources array with all
+		// resources id, when selecting randomly
+		// a resource we just remove it from the
+		// array so that the array alsways contains
+		// available resources
+		for j := 0; j < NB_NODES; j++ {
+			resources[j] = j
 		}
+		var destination int = 0
+		for k := 0; k < REQUEST_SIZE; k++ {
+			rand.Seed(time.Now().UnixNano())
+			var idx int = rand.Intn(len(resources))
+			request.resourceId[k] = resources[idx]
+			if resources[idx] > destination {
+				destination = resources[idx]
+			}
+			// remove element from array to avoid requesting it twice
+			// changes order, but who cares ?
+			resources[idx] = resources[len(resources) - 1]
+			resources[len(resources) - 1] = 0 
+			resources = resources[:len(resources) - 1]
+		}
+		node.sendRequest(request, destination)
+		
 		for {
 			time.Sleep(100 * time.Millisecond)
-			if (job.replyReceived[request.requestId] == true) {
-				log.Print("Job #", job.id, " entering CS")
-				job.enterCS()
-				job.releaseCS()
-				job.freeResources(request)
+			if (node.replyReceived[request.requestId] == true) {
+				// log.Print("Node #", node.id, " entering CS for REQ#", request.requestId)
+				node.enterCS()
+				node.releaseCS()
+				node.freeResources(request)
 				break
 			}
 		} 
 	}	
-	// log.Print("Job #", job.id," END")	
+	// log.Print("Node #", node.id," END")	
 }
 
-func (job *Job) Dijkstra(wg *sync.WaitGroup) {
-	log.Print("Job #", job.id)
+func (node *Node) Dijkstra(wg *sync.WaitGroup) {
+	log.Print("Node #", node.id)
 
-	go job.requestCS()
-	go job.waitForReplies()
+	go node.requestCS()
+	go node.waitForReplies()
 	for {
 		time.Sleep(100 * time.Millisecond)
 		if CURRENT_ITERATION > NB_ITERATIONS {
@@ -297,41 +294,40 @@ func (job *Job) Dijkstra(wg *sync.WaitGroup) {
 		}
 	}
 
-	log.Print("Job #", job.id," END after ", NB_ITERATIONS," CS entries")	
+	log.Print("Node #", node.id," END after ", NB_ITERATIONS," CS entries")	
 	wg.Done()
 }
 
 func main() {
-	var jobs = make([]Job, NB_JOBS)
+	var nodes = make([]Node, NB_NODES)
 	var wg sync.WaitGroup
-	var messages = make([]chan []byte, NB_JOBS)
+	var messages = make([]chan []byte, NB_NODES)
 	
-	log.Print("nb_process #", NB_JOBS)
+	log.Print("nb_process #", NB_NODES)
 
 	// Initialization
-	for i := 0; i < NB_JOBS; i++ {
-		jobs[i].id = i
-		jobs[i].resourcePresent = true
-		jobs[i].nbCS = 0 
+	for i := 0; i < NB_NODES; i++ {
+		nodes[i].id = i
+		nodes[i].resourcePresent = true
+		nodes[i].nbCS = 0 
 
-		jobs[i].channel = messages[i]
 		messages[i] = make(chan []byte)
-		jobs[i].replyReceived   = make([]bool, NB_JOBS * NB_ITERATIONS)
-		jobs[i].pendingRequests = make([]Request, NB_JOBS * NB_ITERATIONS)
+		nodes[i].replyReceived   = make([]bool, NB_NODES * NB_ITERATIONS)
+		nodes[i].pendingRequests = nil
 	}
-	for i := 0; i < NB_JOBS; i++ {
-		jobs[i].messages = messages
+	for i := 0; i < NB_NODES; i++ {
+		nodes[i].messages = messages
 	}
 
 	// start
-	for i := 0; i < NB_JOBS; i++ {
+	for i := 0; i < NB_NODES; i++ {
 		wg.Add(1)
-		go jobs[i].Dijkstra(&wg)
+		go nodes[i].Dijkstra(&wg)
 	}
 
 	// end
 	wg.Wait()
-	for i := 0; i < NB_JOBS; i++ {
-		log.Print("Job #", jobs[i].id," entered CS ", jobs[i].nbCS, " time")	
+	for i := 0; i < NB_NODES; i++ {
+		log.Print("Node #", nodes[i].id," entered CS ", nodes[i].nbCS, " time")	
 	}
 }
