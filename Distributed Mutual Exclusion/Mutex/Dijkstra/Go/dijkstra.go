@@ -3,6 +3,8 @@
 
 How-to run: 
   go run dijkstra.go 2>&1 |tee /tmp/tmp.log
+or 
+  go to the Go Playground: https://play.golang.org/p/KrlXVfFF-_x
 
 Terminology
 * A scheduler is any computing device which runs the Dijkstra's incremental algorithm
@@ -53,9 +55,9 @@ func displayNodes() {
 */
 type Request struct {
 	requesterNodeId int
-	requestId      int
-	messageType    int
-	resourceId     []int
+	requestId       int
+	messageType     int
+	resourceId      []int
 }
 
 type Node struct {
@@ -159,7 +161,6 @@ func (node *Node) waitForReplies() {
 					log.Print("Node #", node.id, ", Resource NOT available, appending request to pendinglist")
 					node.pendingRequests = append(node.pendingRequests, request)
 				}
-
 			}  else if (request.messageType == REP_TYPE) {
 				var requester = request.requesterNodeId
 				log.Print("Node #", node.id, "<- REPLY for REQ#", request.requestId, ", requester =", requester, ",", msg)
@@ -189,7 +190,7 @@ func (node *Node) waitForReplies() {
 				}
 
 			} else {
-				log.Fatal("WTF")
+				log.Fatal("Fatal Error")
 			}
 		}
 	}
@@ -237,6 +238,7 @@ func (node *Node) requestCS() {
 		time.Sleep(100 * time.Millisecond)
 
 		var request Request
+		request.messageType = REQ_TYPE
 		request.requesterNodeId = node.id
 		request.requestId = REQUEST_ID
 		REQUEST_ID += 1

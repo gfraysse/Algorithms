@@ -153,7 +153,7 @@ func (n *Node) releaseCS() {
 		}
 	}
 	if found == false {
-		log.Fatal("WTF1")
+		log.Fatal("Fatal Error")
 	}
 }
 
@@ -196,11 +196,9 @@ func (n *Node) waitForReplies() {
 			log.Print("node #", n.id, " , SENDING reply ", content, " to node #", requester)	
 			var r Request 
 			r.id = requester
-			//n.timestamp++
-			r.timestamp = ts //n.timestamp
+			r.timestamp = ts
 			n.queue = append(n.queue, r)
 			sort.Sort(ByTimestamp(n.queue))
-			// log.Print(n)
 			n.messages[requester] <- content
 		} else if (strings.Contains(msg, "REL")) {
 			var requester, err = strconv.Atoi(msg[3:4])
@@ -222,21 +220,14 @@ func (n *Node) waitForReplies() {
 			// log.Print(n)
 
 		} else {
-			log.Fatal("WTF2")	
+			log.Fatal("Fatal Error")	
 		}
 	}
 	// log.Print("Node #", n.id, " got all replies")
 	// log.Print(n)
 	if sumVector(n.replies) == len(n.messages) - 1 && n.queue[0].id == n.id && n.inCS == false {
-	// if sumVector(n.replies) == len(n.messages) - 1 {
-	// 	// var found bool = false
-	// 	for i := 0; i < len(n.queue); i++ {
-	// 		if n.queue[i].id == n.id {
-				// found = true
 		n.enterCS()
 		n.releaseCS()
-		// 	}
-		// }
 	}
 }
 

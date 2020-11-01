@@ -2,7 +2,7 @@
   Copyright "Guillaume Fraysse <gfraysse dot spam plus code at gmail dot com>"
 
 TODO: 
-- define requests and update sendRequest 
+- finalize implementation
 
 How-to run: 
   go run awerbuch-saks.go 2>&1 |tee /tmp/tmp.log
@@ -30,8 +30,6 @@ import (
 	"log"
 	"math/rand"
 	"sync"
-	"strings"
-	"strconv"
 	"time"
 )
 
@@ -43,6 +41,8 @@ var CURRENT_ITERATION int = 0
 
 var MAX_SLOTS         = 50
 
+var REQ_TYPE   int = 0
+var REP_TYPE   int = 1
 /*
 // Debug function
 func displayJobs() {
@@ -53,7 +53,9 @@ func displayJobs() {
 */
 type Request struct {
 	requesterJobId int
-	resourceId    []int
+	requestId      int
+	messageType    int
+	resourceId     []int
 }
 
 type Position struct {
@@ -77,8 +79,32 @@ type Job struct {
 	// Implementation specific
 	nbCS       int // the number of time the node entered its Critical Section
 	queue      []Request
-	channel    chan string
-	messages   []chan string
+	messages   []chan []byte
+}
+
+func UnmarshalRequest(text []byte, request *Request) error {
+	request.requesterJobId = int(text[0])
+	request.requestId      = int(text[1])
+	request.messageType    = int(text[2])
+	request.resourceId = make ([]int, REQUEST_SIZE)
+	
+	for i := 0; i < REQUEST_SIZE; i++ {
+		request.resourceId[i] = int(text[3 + i])
+	}
+	
+	return nil
+}
+
+func MarshalRequest(request Request) ([]byte, error) {
+	var ret = make ([]byte, 3 + REQUEST_SIZE)
+
+	ret[0] = byte(request.requesterJobId)
+	ret[1] = byte(request.requestId)
+	ret[2] = byte(request.messageType)
+	for i := 0; i < REQUEST_SIZE; i++ {
+		ret[3 + i] = byte(request.resourceId[i])
+	}
+	return ret, nil
 }
 
 func removeFromJobSet(slice []JobSet, i int) []JobSet {
@@ -130,6 +156,7 @@ func obstructs(p1 Position, p2 Position) bool {
 }
 
 func (job *Job) schedule(receivedCompete []JobSet) {
+	log.Print("Job #", job.id," schedule")	
 	var L int = 0
 	for i := 0; i < len(receivedCompete); i ++ {
 		job.compete[receivedCompete[i].jobid].position.level = 0		
@@ -145,12 +172,14 @@ func (job *Job) schedule(receivedCompete []JobSet) {
 }
 
 func (job *Job) done() {
+	log.Print("Job #", job.id," done")	
 	job.position.level = 0
 	job.position.slot = -1
 	job.rebalance()
 }
 
 func (job *Job) report(k int, P Position) {
+	log.Print("Job #", job.id," report")	
 	var jk JobSet
 	jk.jobid = k
 	job.compete = append (job.compete, jk)
@@ -197,6 +226,7 @@ func minIntersect(s1 []int, s2 []int) int {
 }
 
 func (job *Job) advance() {
+	log.Print("Job #", job.id," advance")	
 	if job.position.slot > 0 {
 		job.position.slot --
 	} else {
@@ -240,6 +270,7 @@ func (job *Job) advance() {
 }
 
 func (job *Job) rebalance() {
+	log.Print("Job #", job.id," rebalance")	
 	for i := 0; i < len(job.compete); i ++ {
 		var k JobSet = job.compete[i]
 		if job.imbalance[k.jobid] == -1 {
@@ -250,11 +281,14 @@ func (job *Job) rebalance() {
 
 func (job *Job) sendExecute() {
 	// to myself ... so nothing to do but enter
+	log.Print("Job #", job.id," sendExecute")	
 	job.enterCS()
 	job.releaseCS()	
 }
 
 func (job *Job) announce() {
+	log.Print("Job #", job.id," announce")	
+	log.Print(job)
 	if job.position.level == 0 && job.position.slot == 0 {
 		job.sendExecute()
 	} else {
@@ -267,14 +301,20 @@ func (job *Job) announce() {
 }
 
 func (job *Job) inform(k int) {
+	log.Print("Job #", job.id," inform")	
 	job.sendReport(k, job.id, job.position)
 	job.imbalance[k] ++
 }
 
 func (job *Job) sendReport(k int, jobId int, position Position) {
+	var report Request
+	content, err := MarshalRequest(report)
+	if err != nil {
+		log.Fatal(err)
+	}			
 	for i := 0; i < len(job.messages); i++ {
 		if i == k {
-			var content = fmt.Sprintf("REP%d%d%d", job.id, position.level, position.slot)
+			// var content = fmt.Sprintf("REP%d%d%d", job.id, position.level, position.slot)
 			log.Print("Job #", job.id, ",  REPORT ", content, " with position #", position.level, ".", position.slot, " to Job #", k)	
 			job.messages[i] <- content
 		}
@@ -286,47 +326,24 @@ func (job *Job) waitForReplies() {
 	for {
 		select {
 		case msg := <-job.messages[job.id]:
-			if (strings.Contains(msg, "REQ")) {
-				// import ("encoding/json")
-				// json.NewDecoder(r.Body).Decode(&s)
-				// s.add()
-				// json.NewEncoder(w).Encode(s)
-				// requester is the variable j in the paper
-				var requester, err = strconv.Atoi(msg[3:4])
-				if err != nil {
-					log.Fatal(err)
-				}
-				// k is seqNumber,
-				// k is the name of the variable in the paper
-				var res1, err2 = strconv.Atoi(msg[4:5])
-				if err2 != nil {
-					log.Fatal(err2)
-				}
-				var res2, err3 = strconv.Atoi(msg[5:6])
-				if err3 != nil {
-					log.Fatal(err3)
-				}
-				log.Print("Requester #", requester)
+			var request Request
+			err := UnmarshalRequest(msg, &request)
+			if err != nil {
+				log.Fatal(err)
+			}			
+			if (request.messageType == REQ_TYPE) {
+				var requester = request.requesterJobId
+				var res = request.resourceId
+				log.Print("Node #", job.id, "<-REQ#", request.requestId, ", Requester #", requester, ", nb of res:", len(res))
 				var jobset JobSet
 				jobset.jobid = 0
 				jobset.resources = res
-
-			}  else if (strings.Contains(msg, "REP")) {
-				var sender, err = strconv.Atoi(msg[3:4])
-				if err != nil {
-					log.Fatal(err)
-				}
-				var level, err2 = strconv.Atoi(msg[4:5])
-				if err2 != nil {
-					log.Fatal(err)
-				}
-				var slot, err3 = strconv.Atoi(msg[5:6])
-				if err3 != nil {
-					log.Fatal(err)
-				}
-				log.Print("Job #", job.id, ", RECEIVED report from Job #", sender, ",", msg)
+				job.schedule(job.compete)
+			} else if (request.messageType == REP_TYPE) {
+				var requester = request.requesterJobId
+				log.Print("Job #", job.id, ", received REPORT from Job #", requester, ",", msg)
 			} else {
-				log.Fatal("WTF")
+				log.Fatal("Fatal Error")
 			}
 		}
 	}
@@ -335,11 +352,15 @@ func (job *Job) waitForReplies() {
 }
 
 func (job *Job) sendRequest(request Request) {
+	content, err := MarshalRequest(request)
+	if err != nil {
+		log.Fatal(err)
+	}			
 	for i := 0; i < len(request.resourceId); i++ {
 		for j := 0; j < len(job.messages); j++ {
 			if i == j {
-				var content = fmt.Sprintf("REQ%d%d%d", job.id, request.resourceId[0], request.resourceId[1])
-				log.Print("Job #", job.id, ",  REQUEST ", content, " for resources #", request.resourceId[0], ", ", request.resourceId[1], " to Job #", j)	
+				// var content = fmt.Sprintf("REQ%d%d%d", job.id, request.resourceId[0], request.resourceId[1])
+				log.Print("Job #", job.id, ",  REQUEST #", request.requestId, ":", content, " for resources #", request.resourceId[0], ", ", request.resourceId[1], " to Job #", j)	
 				job.messages[j] <- content
 			}
 		}
@@ -355,11 +376,12 @@ func (job *Job) requestCS() {
 		for i := 0; i < NB_JOBS; i ++ {
 			if (i != job.id) {
 				var request Request
-				var resources []int
+				var resources = make([]int, NB_JOBS)
 				for j := 0; j < NB_JOBS; j++ {
 					resources[j] = j
 				}
 				request.requesterJobId = job.id
+				request.resourceId = make([]int, REQUEST_SIZE)
 				for k := 0; k < REQUEST_SIZE; k++ {
 					rand.Seed(time.Now().UnixNano())
 					var idx int = rand.Intn(len(resources))
@@ -404,7 +426,7 @@ func (job *Job) AwerbuchSaks(wg *sync.WaitGroup) {
 func main() {
 	var jobs = make([]Job, NB_JOBS)
 	var wg sync.WaitGroup
-	var messages = make([]chan string, NB_JOBS)
+	var messages = make([]chan []byte, NB_JOBS)
 	
 	log.Print("nb_process #", NB_JOBS)
 
@@ -413,8 +435,7 @@ func main() {
 		jobs[i].id = i
 		jobs[i].nbCS = 0 
 
-		jobs[i].channel = messages[i]
-		messages[i] = make(chan string)
+		messages[i] = make(chan []byte)
 	}
 	for i := 0; i < NB_JOBS; i++ {
 		jobs[i].messages = messages

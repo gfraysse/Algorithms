@@ -33,9 +33,9 @@ import (
 )
 
 /* global variable declaration */
-var NB_NODES          int = 44
+var NB_NODES          int = 5
 var NB_MSG            int = 0
-var NB_ITERATIONS     int = 500
+var NB_ITERATIONS     int = 10
 var CURRENT_ITERATION int = 0
 
 var STATE_THINKING    int = 0

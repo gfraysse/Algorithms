@@ -36,9 +36,6 @@ def dijkstra(adjacency_matrix, entry):
 
     current_vertex = entry
     num_nodes = len(adjacency_matrix)
-    vertices = []
-    for i in range(num_nodes):        
-        vertices.append(string.ascii_uppercase[i])
         
     Q = [i for i in range(num_nodes)]
 
@@ -51,8 +48,6 @@ def dijkstra(adjacency_matrix, entry):
 
     dist[current_vertex] = 0        
     
-    last_found_resource = -1
-        
     while len(Q) != 0:        
         min_dist = INFINITY
         for q in Q:
