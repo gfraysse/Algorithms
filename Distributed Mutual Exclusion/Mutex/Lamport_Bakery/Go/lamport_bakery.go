@@ -72,7 +72,7 @@ type Node struct {
 	inCS       bool      
 	queue      []Request
 	replies    [4]int
-	channel    chan string
+	// channel    chan string
 	messages   [4]chan string
 }
 
@@ -263,7 +263,7 @@ func main() {
 		for r := 0; r < len(nodes); r++ {
 			nodes[i].replies[r] = 0
 		}
-		nodes[i].channel = messages[i]
+		// nodes[i].channel = messages[i]
 		messages[i] = make(chan string)
 	}
 	for i := 0; i < len(nodes); i++ {

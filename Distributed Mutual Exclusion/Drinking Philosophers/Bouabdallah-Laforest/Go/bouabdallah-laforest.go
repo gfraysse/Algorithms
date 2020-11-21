@@ -61,17 +61,13 @@ type Token struct {
 	locked bool
 }
 
-// type TokensForNode struct {
-// 	node   Node
-// 	tokens []Token
-// }
-
 type ControlToken struct {	
 	A []int
 	B map[int][]int
 }
 
 var ControlTokenInstance ControlToken
+var ctMutex = &sync.Mutex{}
 
 type Request struct {
 	requesterNodeId int
@@ -183,16 +179,18 @@ func (ct *ControlToken) getTokensPossessedByNode(n *Node) []int{
 }
 
 func (ct *ControlToken) addFreeToken(token int) {
+	ctMutex.Lock()
 	ct.A = append(ct.A, token)
+	ctMutex.Unlock()
 }
 
 // func (ct *ControlToken) removeNeededTokensFromFreeTokens(requestedTokens []Token, tokensOwned []Token) {
 func (ct *ControlToken) removeNeededTokensFromFreeTokens(node *Node) {
-	// log.Print("removeNeededTokensFromFreeTokens")
+	log.Print("BEGIN removeNeededTokensFromFreeTokens")
 	
 	// var tokensOwned []Token = make([]Token, len(node.tokens))
 	// copy(tokensOwned, node.tokens)
-
+	ctMutex.Lock()
 	var tokens []int = make ([]int, len(node.tokensNeeded))
 	copy(tokens, node.tokensNeeded)
 	
@@ -217,6 +215,8 @@ func (ct *ControlToken) removeNeededTokensFromFreeTokens(node *Node) {
 			i++
 		}
 	}
+	ctMutex.Unlock()
+	log.Print("END removeNeededTokensFromFreeTokens")
 }
 
 func (ct *ControlToken) isTokenPossessedByNode(token int) bool {
@@ -245,17 +245,23 @@ func (ct *ControlToken) getTokenOwnerFromPossessedByNode(token int) int{
 }
 
 func (ct *ControlToken) removeTokenFromPossessedByNode(token int) int {
+	log.Print("BEGIN removeTokenFromPossessedByNode", ct.String())
 	// log.Print("removeTokenFromPossessedByNode")
+	ctMutex.Lock()
 	for key, _ := range ct.B {
 		for i := 0; i < len(ct.B[key]); i ++ {
-            if token == ct.B[key][i] {
-                ct.B[key][i] = ct.B[key][len(ct.B[key]) - 1]
-                ct.B[key] = ct.B[key][:len(ct.B[key]) - 1]
-                return key
-            }
-        }
-    }
-    return -1
+			if token == ct.B[key][i] {
+				ct.B[key][i] = ct.B[key][len(ct.B[key]) - 1]
+				ct.B[key] = ct.B[key][:len(ct.B[key]) - 1]
+				ctMutex.Unlock()
+				log.Print("END1 removeTokenFromPossessedByNode", ct.String())
+				return key
+			}
+		}
+	}
+	ctMutex.Unlock()
+	log.Print("END2 removeTokenFromPossessedByNode", ct.String())
+	return -1
 }
 
 func (ct *ControlToken) updateForRequest(
@@ -265,9 +271,9 @@ func (ct *ControlToken) updateForRequest(
 	// tokensOwned []Token,
 	missingTokens *([]int),
 	requestedResourcesForNode *(map[int][]int)) {
-
+	
 	// log.Print("Node #", n.id, ", updateForRequest")
-	// log.Print(ct.String())
+	log.Print("BEGIN updateForRequest", ct.String())
 	// First move the tokens already owned by nodeName in B to A
 	var tokensPossessedByNode []int = ct.getTokensPossessedByNode(n)
 	for i := 0; i < len(tokensPossessedByNode); i ++ {
@@ -324,7 +330,9 @@ func (ct *ControlToken) updateForRequest(
 		}
 	}
 	// log.Print(ct.String())	
+	log.Print("END updateForRequest", ct.String())
 }
+
 ////////////////////////////////////////////////////////////
 // Node class
 ////////////////////////////////////////////////////////////
@@ -339,9 +347,14 @@ func (n *Node) String() string {
 
 func (n *Node) enterCS() {
 	log.Print("Node #", n.id, " ######################### enterCS")
-	log.Print(ControlTokenInstance.String())
+	log.Print("Node #", n.id, ControlTokenInstance.String())
 	CURRENT_ITERATION ++
 	n.nbCS ++
+	// log.Print(n)
+}
+
+func (node *Node) executeCSCode() {
+	log.Print("Node #", node.id, " ######################### executeCSCode")
 	// log.Print(n)
 	time.Sleep(500 * time.Millisecond)
 }
@@ -353,6 +366,7 @@ func (n *Node) releaseCS() {
 }
 
 func (n *Node) leaveBLCS() {
+	log.Print("BEGIN leaveBLCS")
 	for i := 0; i < len(n.tokens); i ++ {
 		n.tokens[i].locked = BL_FREE
 	}
@@ -361,7 +375,7 @@ func (n *Node) leaveBLCS() {
 	for key, _ := range n.waitingSet {
 		if len(n.waitingSet[key]) > 0 {
 			var tokens []int = n.waitingSet[key]
-			n.sendACK2(&tokens, key)
+			go n.sendACK2(&tokens, key)
 		}
 	}
 	n.waitingSet = make(map[int][]int)
@@ -374,11 +388,13 @@ func (n *Node) leaveBLCS() {
 			ControlTokenInstance.removeTokenFromPossessedByNode(tokensPossessedByNode[i])
 		}
 		if n.next != -1 {
-			n.sendCT(n.next)
+			go n.sendCT(n.next)
 			n.last = n.next
 			n.next = -1
 		}
 	}	
+	log.Print("END leaveBLCS")
+	n.requestCS()
 }
 
 func (n *Node) ownsToken(id int) bool {
@@ -419,7 +435,7 @@ func (n *Node) handleCTRequest(request Request) {
 			n.next = request.requesterNodeId
 		} else {
 			n.has_CT = false
-			n.sendCT(request.requesterNodeId)
+			go n.sendCT(request.requesterNodeId)
 		}		
 	} else {
 		// Code duplication to remove
@@ -439,7 +455,9 @@ func (n *Node) handleCTRequest(request Request) {
 }
 
 func (n *Node) enterBLCS(request Request) bool {
+	log.Print("node #", n.id, " enterBLCS, request #", request)
 	n.enterCS()
+	n.executeCSCode()
 	n.releaseCS()
 	return false
 }
@@ -478,7 +496,7 @@ func (n *Node) enterCSIfCan(request Request) bool {
 		
 		// Finished using the Control Token, keep it going if there is a Next
 		if n.next != -1 {
-			n.sendCT(n.next)
+			go n.sendCT(n.next)
 			n.last = n.next
 			n.next = -1
 		}
@@ -641,10 +659,10 @@ func (n *Node) receiveInquire(request Request) {
 				// log.Print("removeFromSet", token, "n ",n)
 				n.removeTokenFromSet(token)			
 				sentTokens = append(sentTokens, token)
-				// log.Print("removeFromSet", token, "n ", n, " end")
+				log.Print("removeFromSet", token, "n ", n, " end")
 			} else {
 				notSentTokens = append(notSentTokens, token)
-				// log.Print("notSentTokens")
+				log.Print("notSentTokens", notSentTokens)
 			}
 		}
 	}
@@ -653,10 +671,11 @@ func (n *Node) receiveInquire(request Request) {
 	copy (n.waitingSet[requester], notSentTokens)
 	
 	if len(sentTokens) > 0 {
-		n.sendACK1(&sentTokens, requester)
+		go n.sendACK1(&sentTokens, requester)
 	} else {
 		log.Print("toto")
 	}
+	log.Print("n=", n)
 }
 
 func (n *Node) sendACK1(sentTokens *([]int), dst int) {
@@ -753,29 +772,31 @@ func (n *Node) receiveACK2(request Request) bool {
 
 func (n *Node) receiveCT() {
 	log.Print("** Node #", n.id, " Got TOKEN **")
-	log.Print(ControlTokenInstance.String())
+	log.Print("** Node #", n.id, ", CT=", ControlTokenInstance.String())
 	log.Print("** Node #", n.id, " needs **", n.currentRequest.resourceId)
 	n.has_CT = true
-    n.tokens = make([]Token, len(ControlTokenInstance.B[n.id]))
+	n.tokens = make([]Token, len(ControlTokenInstance.B[n.id]))
 	for i := 0; i < len(ControlTokenInstance.B[n.id]); i++ {
 		n.tokens[i].id = ControlTokenInstance.B[n.id][i]
 	}
 	
 	for i := 0; i < len(n.currentRequest.resourceId); i++ {
 		var token int = n.currentRequest.resourceId[i]
-        if !n.isTokenInSet(token) && !n.isTokenNeeded(token) {
-            n.tokensNeeded = append (n.tokensNeeded, token)
-        } else {
+		if !n.isTokenInSet(token) && !n.isTokenNeeded(token) {
+			n.tokensNeeded = append (n.tokensNeeded, token)
+		} else {
 			n.lockResource(token)
-        }
-    }
+		}
+	}
 
 	n.updateCTForRequest(n.currentRequest)
-	log.Print(ControlTokenInstance)
+	log.Print("** Node #", n.id, "**", ControlTokenInstance.String())
+	log.Print(n)
+	log.Print("** Node #", n.id, ", END receiveCT")
 }
 
-func (n *Node) waitForReplies() {	
-	// log.Print("Node #", n.id," waitForReplies")	
+func (n *Node) rcv() {	
+	// log.Print("Node #", n.id," rcv")	
 	for {
 		select {
 		case msg := <-n.messages[n.id]:
@@ -785,11 +806,12 @@ func (n *Node) waitForReplies() {
 				log.Fatal(err)
 			}			
 			var requester = request.requesterNodeId
-			if (request.messageType == REQ_TYPE) {
-				var res = request.resourceId
-				log.Print("Node #", n.id, "<-REQ#", request.requestId, ", Requester #", requester, ", nb of res:", len(res), " res ", res)
-				go n.handleRequest(request)
-			} else if (request.messageType == REP_TYPE) {
+			// if (request.messageType == REQ_TYPE) {
+			// 	var res = request.resourceId
+			// 	log.Print("Node #", n.id, "<-REQ#", request.requestId, ", Requester #", requester, ", nb of res:", len(res), " res ", res)
+			// 	go n.handleRequest(request)
+			// } else
+			if (request.messageType == REP_TYPE) {
 				log.Print("Node #", n.id, ", received REPLY from Node #", requester, ",", msg)
 			} else if (request.messageType == REQ_CT_TYPE) {
 				log.Print("Node #", n.id, ", received REQUEST Control Token from Node #", requester, ",", msg)
@@ -812,7 +834,7 @@ func (n *Node) waitForReplies() {
 		}
 	}
 	// log.Print(n)
-	// log.Print("Node #", n.id, " end waitForReplies")
+	// log.Print("Node #", n.id, " end rcv")
 }
 
 func (n *Node) requestCT() {
@@ -833,52 +855,63 @@ func (n *Node) requestCT() {
 	n.last = -1		
 }
 
-func (n *Node) sendRequest(request Request) {
-	content, err := MarshalRequest(request)
-	if err != nil {
-		log.Fatal(err)
+// func (n *Node) sendRequest(request Request) {
+// 	content, err := MarshalRequest(request)
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+// 	//TODO destination should be any node not the one making the request
+// 	// var i = request.resourceId[0]
+// 	log.Print("Node #", n.id, ",  REQUEST #", request.requestId, ":", content, " for resources #", request.resourceId[0], ", ", request.resourceId[1], " to Node #", n.id)	
+// 	n.messages[n.id] <- content
+// }
+
+func (n *Node) buildRequest() Request {
+	var request Request
+	request.messageType = REQ_TYPE
+	var resources = make([]int, NB_NODES)
+	for j := 0; j < NB_NODES; j++ {
+		resources[j] = j
 	}
-	//TODO destination should be any node not the one making the request
-	// var i = request.resourceId[0]
-	log.Print("Node #", n.id, ",  REQUEST #", request.requestId, ":", content, " for resources #", request.resourceId[0], ", ", request.resourceId[1], " to Node #", n.id)	
-	n.messages[n.id] <- content
+	request.requesterNodeId = n.id
+	request.requestId = n.requestIdCounter
+	n.requestIdCounter ++
+	request.resourceId = make([]int, REQUEST_SIZE)
+	for k := 0; k < REQUEST_SIZE; k++ {
+		rand.Seed(time.Now().UnixNano())
+		var idx int = rand.Intn(len(resources))
+		request.resourceId[k] = resources[idx]
+		// remove element from array to avoid requesting it twice
+		// changes order, but who cares ?
+		resources[idx] = resources[len(resources) - 1]
+		resources[len(resources) - 1] = 0 
+		resources = resources[:len(resources) - 1]
+	}
+	return request
 }
 
 func (n *Node) requestCS() {
 	// log.Print("Node #", n.id, " requestCS")
 	
-	for {
-		time.Sleep(100 * time.Millisecond)
+	// for {
+	// 	time.Sleep(100 * time.Millisecond)
 
 		// for i := 0; i < NB_NODES; i ++ {
 		// 	if (i != n.id) {
-				var request Request
-				request.messageType = REQ_TYPE
-				var resources = make([]int, NB_NODES)
-				for j := 0; j < NB_NODES; j++ {
-					resources[j] = j
-				}
-				request.requesterNodeId = n.id
-				request.requestId = n.requestIdCounter
-				n.requestIdCounter ++
-				request.resourceId = make([]int, REQUEST_SIZE)
-				for k := 0; k < REQUEST_SIZE; k++ {
-					rand.Seed(time.Now().UnixNano())
-					var idx int = rand.Intn(len(resources))
-					request.resourceId[k] = resources[idx]
-					// remove element from array to avoid requesting it twice
-					// changes order, but who cares ?
-					resources[idx] = resources[len(resources) - 1]
-					resources[len(resources) - 1] = 0 
-					resources = resources[:len(resources) - 1]
-				}
-				n.sendRequest(request)
+		var request Request = n.buildRequest()
+		
+		var requester = request.requesterNodeId
+		var res = request.resourceId
+		log.Print("Node #", n.id, "<-REQ#", request.requestId, ", Requester #", requester, ", nb of res:", len(res), " res ", res)
+		n.handleRequest(request)
+		
+		// n.sendRequest(request)
 		// 	}
 		// }
-		for {
-			time.Sleep(1000 * time.Millisecond)
-		} 
-	}	
+		// for {
+		// 	time.Sleep(1000 * time.Millisecond)
+		// } 
+	// }	
 	// log.Print("Node #", n.id," END")	
 }
 
@@ -886,7 +919,7 @@ func (n *Node) BouabdallahLaforest(wg *sync.WaitGroup) {
 	log.Print("Node #", n.id)
 
 	go n.requestCS()
-	go n.waitForReplies()
+	go n.rcv()
 	for {
 		time.Sleep(100 * time.Millisecond)
 		if CURRENT_ITERATION > NB_ITERATIONS {
@@ -914,7 +947,7 @@ func main() {
 		nodes[i].requesting = false
 		nodes[i].next = -1
 		nodes[i].last = 0
-		nodes[i].requestIdCounter = i * 100
+		nodes[i].requestIdCounter = i * 10
 		
 		// Initially the first node holds the Control Token
 		if nodes[i].last == nodes[i].id {

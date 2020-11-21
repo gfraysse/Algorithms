@@ -2,8 +2,7 @@
   Copyright "Guillaume Fraysse <gfraysse dot spam plus code at gmail dot com>"
 
 How-to run: 
-  go build chandy-misra.go 
-  ./chandy-misra 2>&1 |tee /tmp/tmp.log
+  go run drinking_philosophers_chandy-misra.go 2>&1 |tee /tmp/tmp.log
 
 Parameters:
 - Number of nodes is set with NB_NODES global variable
@@ -33,9 +32,9 @@ import (
 )
 
 /* global variable declaration */
-var NB_NODES          int = 44
+var NB_NODES          int = 4
 var NB_MSG            int = 0
-var NB_ITERATIONS     int = 500
+var NB_ITERATIONS     int = 50
 var CURRENT_ITERATION int = 0
 
 var STATE_THINKING    int = 0

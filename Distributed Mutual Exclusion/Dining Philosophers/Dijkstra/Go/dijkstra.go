@@ -32,7 +32,7 @@ import (
 )
 
 /* global variable declaration */
-var NB_NODES           int = 4
+var NB_NODES          int = 4
 var REQUEST_SIZE      int = 2
 var NB_ITERATIONS     int = 10
 var CURRENT_ITERATION int = 0
@@ -84,6 +84,11 @@ func (node *Node) enterCS() {
 	CURRENT_ITERATION ++
 	node.nbCS ++
 	// log.Print(n)
+}
+
+func (node *Node) executeCSCode() {
+	log.Print("Node #", node.id, " ######################### executeCSCode")
+	// log.Print(n)
 	time.Sleep(500 * time.Millisecond)
 }
 
@@ -128,8 +133,8 @@ func getNextResourceForReq(request Request, current int) int {
 	return next
 }
 
-func (node *Node) waitForReplies() {	
-	// log.Print("Node #", node.id," waitForReplies")	
+func (node *Node) rcv() {	
+	// log.Print("Node #", node.id," rcv")	
 	for {
 		select {
 		case msg := <-node.messages[node.id]:
@@ -161,10 +166,6 @@ func (node *Node) waitForReplies() {
 					log.Print("Node #", node.id, ", Resource NOT available, appending request to pendinglist")
 					node.pendingRequests = append(node.pendingRequests, request)
 				}
-			}  else if (request.messageType == REP_TYPE) {
-				var requester = request.requesterNodeId
-				log.Print("Node #", node.id, "<- REPLY for REQ#", request.requestId, ", requester =", requester, ",", msg)
-				node.replyReceived[request.requestId] = true
 			}  else if (request.messageType == FREE_TYPE) {
 				var requester = request.requesterNodeId
 				log.Print("Node #", node.id, "<- FREE for REQ#", request.requestId, ", requester =", requester, ",", msg)
@@ -188,14 +189,21 @@ func (node *Node) waitForReplies() {
 						go node.sendRequest(r, next_res)
 					}
 				}
-
+			}  else if (request.messageType == REP_TYPE) {
+				var requester = request.requesterNodeId
+				log.Print("Node #", node.id, "<- REPLY for REQ#", request.requestId, ", requester =", requester, ",", msg)
+				node.enterCS()
+				node.executeCSCode()
+				node.releaseCS()
+				go node.freeResources(request)
+				go node.requestCS()				
 			} else {
 				log.Fatal("Fatal Error")
 			}
 		}
 	}
 	// log.Print(n)
-	// log.Print("Node #", node.id, " end waitForReplies")
+	// log.Print("Node #", node.id, " end rcv")
 }
 
 func (node *Node) freeResources(r Request) {
@@ -234,62 +242,49 @@ func (node *Node) sendRequest(request Request, destination int) {
 func (node *Node) requestCS() {
 	// log.Print("Node #", node.id, " requestCS")
 
-	for {
-		time.Sleep(100 * time.Millisecond)
-
-		var request Request
-		request.messageType = REQ_TYPE
-		request.requesterNodeId = node.id
-		request.requestId = REQUEST_ID
-		REQUEST_ID += 1
-		node.replyReceived[request.requestId] = false
-				
-		var resources = make([]int, NB_NODES)
-		request.resourceId = make([]int, REQUEST_SIZE)
-		// initialize a resources array with all
-		// resources id, when selecting randomly
-		// a resource we just remove it from the
-		// array so that the array alsways contains
-		// available resources
-		for j := 0; j < NB_NODES; j++ {
-			resources[j] = j
+	var request Request
+	request.messageType = REQ_TYPE
+	request.requesterNodeId = node.id
+	request.requestId = REQUEST_ID
+	REQUEST_ID += 1
+	// node.replyReceived[request.requestId] = false
+	
+	var resources = make([]int, NB_NODES)
+	request.resourceId = make([]int, REQUEST_SIZE)
+	// initialize a resources array with all
+	// resources id, when selecting randomly
+	// a resource we just remove it from the
+	// array so that the array alsways contains
+	// available resources
+	for j := 0; j < NB_NODES; j++ {
+		resources[j] = j
+	}
+	var destination int = 0
+	for k := 0; k < REQUEST_SIZE; k++ {
+		rand.Seed(time.Now().UnixNano())
+		var idx int = rand.Intn(len(resources))
+		request.resourceId[k] = resources[idx]
+		if resources[idx] > destination {
+			destination = resources[idx]
 		}
-		var destination int = 0
-		for k := 0; k < REQUEST_SIZE; k++ {
-			rand.Seed(time.Now().UnixNano())
-			var idx int = rand.Intn(len(resources))
-			request.resourceId[k] = resources[idx]
-			if resources[idx] > destination {
-				destination = resources[idx]
-			}
-			// remove element from array to avoid requesting it twice
-			// changes order, but who cares ?
-			resources[idx] = resources[len(resources) - 1]
-			resources[len(resources) - 1] = 0 
-			resources = resources[:len(resources) - 1]
-		}
-		node.sendRequest(request, destination)
-		
-		for {
-			time.Sleep(100 * time.Millisecond)
-			if (node.replyReceived[request.requestId] == true) {
-				// log.Print("Node #", node.id, " entering CS for REQ#", request.requestId)
-				node.enterCS()
-				node.releaseCS()
-				node.freeResources(request)
-				break
-			}
-		} 
-	}	
+		// remove element from array to avoid requesting it twice
+		// changes order, but who cares ?
+		resources[idx] = resources[len(resources) - 1]
+		resources[len(resources) - 1] = 0 
+		resources = resources[:len(resources) - 1]
+	}
+	go node.sendRequest(request, destination)
+	
 	// log.Print("Node #", node.id," END")	
 }
 
 func (node *Node) Dijkstra(wg *sync.WaitGroup) {
-	log.Print("Node #", node.id)
+	// log.Print("Node #", node.id)
 
 	go node.requestCS()
-	go node.waitForReplies()
+	go node.rcv()
 	for {
+		
 		time.Sleep(100 * time.Millisecond)
 		if CURRENT_ITERATION > NB_ITERATIONS {
 			break

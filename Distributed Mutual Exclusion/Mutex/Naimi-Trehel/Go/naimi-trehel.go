@@ -102,8 +102,8 @@ func (n *Node) requestCS() {
 		for {
 			time.Sleep(100 * time.Millisecond)
 			if (n.requesting == true && n.has_token == true) {
-				n.enterCS() // not explicit in paper
-				n.releaseCS() // not explicit in paper
+				n.enterCS()
+				n.releaseCS()
 				break
 			}
 		} 
@@ -148,11 +148,6 @@ func (n *Node) waitForReplies() {
 				
 			} else if (strings.Contains(msg, "token")) {
 				n.receiveToken()
-				// if (n.requesting == true && n.has_token == true) {
-				// 	n.enterCS() // not explicit in paper
-				// 	n.releaseCS() // not explicit in paper
-			} else {
-				log.Fatal("WTF")	
 			}
 		}
 	}	

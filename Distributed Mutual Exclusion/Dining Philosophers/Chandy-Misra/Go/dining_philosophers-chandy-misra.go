@@ -2,8 +2,7 @@
   Copyright "Guillaume Fraysse <gfraysse dot spam plus code at gmail dot com>"
 
 How-to run: 
-  go build chandy-misra.go 
-  ./chandy-misra 2>&1 |tee /tmp/tmp.log
+  go run dining_philosophers_chandy-misra.go 2>&1 |tee /tmp/tmp.log
 
 Parameters:
 - Number of nodes is set with NB_NODES global variable
