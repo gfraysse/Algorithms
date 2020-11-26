@@ -24,7 +24,6 @@ package ChandyMisra
 import (
 	"fmt"
 	"log"
-	"math/rand"
 	"sync"
 	"strings"
 	"strconv"
@@ -34,21 +33,21 @@ import (
 /* global variable declaration */
 var NB_NODES          int = 4
 var NB_MSG            int = 0
-var NB_ITERATIONS     int = 50
+var NB_ITERATIONS     int = 10
 var CURRENT_ITERATION int = 0
 
 var STATE_THINKING    int = 0
 var STATE_HUNGRY      int = 1
 var STATE_EATING      int = 2
 
-var philosophers []Philosopher
+var Philosophers []Philosopher
 
 // Debug function
 /*
 func displayNodes() {
 	for i := 0; i < NB_NODES; i++ {
 		for j := 0; j < NB_NODES - 1; j++ {
-			log.Print("  P#", philosophers[i].Id, ", fork #", philosophers[i].ForkId[j], ", status=", philosophers[i].ForkStatus[j], ", clean=", philosophers[i].ForkClean[j])
+			log.Print("  P#", Philosophers[i].Id, ", fork #", Philosophers[i].ForkId[j], ", status=", Philosophers[i].ForkStatus[j], ", clean=", Philosophers[i].ForkClean[j])
 		}
 	}
 }
@@ -58,11 +57,11 @@ func checkSanity() {
 	for i := 0; i < NB_NODES; i++ {
 		// Sanity check, it I don't have a fork, check if the owner actually has it, if I have it check it is not owned by the other
 		for j := 0; j < NB_NODES - 1; j ++ {
-			var idx int = philosophers[i].ForkId[j]
+			var idx int = Philosophers[i].ForkId[j]
 			for k := 0; k < NB_NODES - 1; k ++ {
-				if philosophers[i].ForkId[j] == philosophers[idx].ForkId[k] {
-					if philosophers[i].ForkStatus[j] == philosophers[idx].ForkStatus[k] {
-						log.Print("ERR Sanity Check expected philosopher #", i, " fork#", j, " status = ", philosophers[i].ForkStatus[j], ", philosopher#", idx, ", fork #", k, " status=", philosophers[idx].ForkStatus[k])
+				if Philosophers[i].ForkId[j] == Philosophers[idx].ForkId[k] {
+					if Philosophers[i].ForkStatus[j] == Philosophers[idx].ForkStatus[k] {
+						log.Print("ERR Sanity Check expected philosopher #", i, " fork#", j, " status = ", Philosophers[i].ForkStatus[j], ", philosopher#", idx, ", fork #", k, " status=", Philosophers[idx].ForkStatus[k])
 					}
 					break
 				}
@@ -106,16 +105,20 @@ func (p *Philosopher) String() string {
 }
 
 func (p *Philosopher) EnterCS() {
-	log.Print("Philosopher #", p.Id, " ######################### enterCS")
+	log.Print("Philosopher #", p.Id, " ######################### Philosopher.EnterCS")
 	p.State = STATE_EATING
 	p.NbCS ++
 	CURRENT_ITERATION ++
-	time.Sleep(500 * time.Millisecond)
 	checkSanity()
 }
 
+func (p *Philosopher) ExecuteCSCode() {
+	log.Print("Philosopher #", p.Id, " ######################### Philosopher.ExecuteCSCode")
+	time.Sleep(500 * time.Millisecond)
+}
+
 func (p *Philosopher) ReleaseCS() {
-	log.Print("Philosopher #", p.Id," ReleaseCS #########################")	
+	log.Print("Philosopher #", p.Id," Philosopher.ReleaseCS #########################")	
 	p.State = STATE_THINKING
 	for i := 0; i < NB_NODES - 1; i ++ {
 		p.ForkClean[i] = false
@@ -123,7 +126,7 @@ func (p *Philosopher) ReleaseCS() {
 	checkSanity()
 }
 
-func (p *Philosopher) requestFork(philosopherId int) {
+func (p *Philosopher) RequestFork(philosopherId int) {
 	for i := 0; i < len(p.Messages); i++ {
 		if i == philosopherId {
 			var content = fmt.Sprintf("REQ%.2d", p.Id)
@@ -136,7 +139,7 @@ func (p *Philosopher) requestFork(philosopherId int) {
 	}
 }
 
-func (p *Philosopher) sendFork(philosopherId int) {
+func (p *Philosopher) SendFork(philosopherId int) {
 	for i := 0; i < len(p.Messages); i++ {
 		if i == philosopherId {
 			var content = fmt.Sprintf("REP%.2d", p.Id)
@@ -148,8 +151,65 @@ func (p *Philosopher) sendFork(philosopherId int) {
 	}
 }
 
-func (p *Philosopher) waitForReplies() {	
-	log.Print("Philosopher #", p.Id," waitForReplies")	
+func (p *Philosopher) enterCSIfICan() {	
+	var hasSentReq bool = false
+	log.Print("Philosopher #", p.Id, ", checking if forks are missing")
+	for j := 0; j < NB_NODES - 1; j++ {
+		if p.ForkStatus[j] == false {
+			go p.RequestFork(p.ForkId[j])
+			hasSentReq = true
+			break
+		}
+	}
+	if hasSentReq == false {
+		log.Print("Philosopher #", p.Id, ", has not requested any fork")
+		if p.State == STATE_HUNGRY {
+			var allGreen = true
+			
+			for i := 0; i < NB_NODES - 1; i ++ {
+				allGreen = allGreen && p.ForkStatus[i] && p.ForkClean[i]
+				if allGreen == false {
+					// log.Print("Philosopher #", p.Id, " waiting for fork", p.ForkId[i])
+					// displayNodes()
+					break
+				}
+			}
+			if (allGreen == true) {
+				if (p.State == STATE_EATING) {
+					log.Print("** Philosopher #", p.Id, " is already eating **")
+				} else {
+					p.EnterCS()
+					p.ExecuteCSCode()
+					p.ReleaseCS()
+					for i := 0; i < len(p.Queue); i++ {
+						var r ForkRequest
+						r = p.Queue[i]
+						for j := 0; j < NB_NODES - 1; j++ {
+							if (r.PhilosopherId == p.ForkId[j] && p.ForkStatus[j] == true) {
+								p.ForkStatus[j] = false
+								go p.SendFork(r.PhilosopherId)
+								break
+							}
+						}
+					}
+					p.Queue = nil
+					for j := 0; j < NB_NODES - 1; j++ {
+						if (p.ForkStatus[j] == true) {
+							p.ForkStatus[j] = false
+							go p.SendFork(p.ForkId[j])
+						}
+					}
+					p.RequestCS()								
+				}
+			}
+		} else {
+			log.Print("NOT HUNGRY")
+		}
+		
+	}
+}
+func (p *Philosopher) WaitForReplies() {	
+	log.Print("Philosopher #", p.Id," WaitForReplies")	
 	for {
 		select {
 		case msg := <-p.Messages[p.Id]:
@@ -172,7 +232,7 @@ func (p *Philosopher) waitForReplies() {
 							} else {
 								p.ForkStatus[i]    = false
 								p.ForkStatus[i]    = false
-								p.sendFork(requester)
+								go p.SendFork(requester)
 							}						
 							break
 						} else {
@@ -180,6 +240,7 @@ func (p *Philosopher) waitForReplies() {
 						}
 					}
 				}
+				p.enterCSIfICan()
 			}  else if (strings.Contains(msg, "REP")) {
 				var sender, err = strconv.Atoi(msg[3:5])
 				if err != nil {
@@ -194,21 +255,9 @@ func (p *Philosopher) waitForReplies() {
 						break
 					}
 				}
-				var hasSentReq bool = false
-				log.Print("Philosopher #", p.Id, ", checking if forks are missing")
-				for j := 0; j < NB_NODES - 1; j++ {
-					if p.ForkStatus[j] == false {
-						p.requestFork(p.ForkId[j])
-						hasSentReq = true
-						break
-					}
-				}
-				if hasSentReq == false {
-					log.Print("Philosopher #", p.Id, ", has not requested any fork")
-				}
-					
+				p.enterCSIfICan()
 			} else {
-				log.Fatal("WTF")
+				log.Fatal("Unknown message", msg)
 			}
 		}
 	}
@@ -217,76 +266,29 @@ func (p *Philosopher) waitForReplies() {
 func (p *Philosopher) RequestCS() {
 	log.Print("Philosopher #", p.Id, " RequestCS")
 
-	for {
-		time.Sleep(100 * time.Millisecond)
-		if p.State == STATE_THINKING {
-			rand.Seed(time.Now().UnixNano())
-			var proba int = rand.Intn(2)
-			// log.Print("Proba =", proba)
-			if proba < 1 {
-				p.State = STATE_HUNGRY
-				log.Print("Philosopher #", p.Id, " wants to enter CS")
-				for j := 0; j < NB_NODES - 1; j++ {
-					if p.ForkStatus[j] == false {
-						p.requestFork(p.ForkId[j])
-						break
-					} else {
-						p.ForkClean[j] = true
-					}
-				}
+	if p.State == STATE_THINKING {
+		p.State = STATE_HUNGRY
+		log.Print("Philosopher #", p.Id, " wants to enter CS")
+		for j := 0; j < NB_NODES - 1; j++ {
+			if p.ForkStatus[j] == false {
+				go p.RequestFork(p.ForkId[j])
+				break
 			} else {
-				// log.Print("Philosopher #", p.Id, " DOES NOT want to enter CS")
+				p.ForkClean[j] = true
 			}
-		} else if p.State == STATE_HUNGRY {
-			var allGreen = true
-
-			for i := 0; i < NB_NODES - 1; i ++ {
-				allGreen = allGreen && p.ForkStatus[i] && p.ForkClean[i]
-				if allGreen == false {
-					// log.Print("Philosopher #", p.Id, " waiting for fork", p.ForkId[i])
-					// displayNodes()
-					break
-				}
-			}
-			if (allGreen == true) {
-				if (p.State == STATE_EATING) {
-					log.Print("** Philosopher #", p.Id, " is already eating **")
-				} else {
-					p.EnterCS()
-					p.ReleaseCS()
-					for i := 0; i < len(p.Queue); i++ {
-						var r ForkRequest
-						r = p.Queue[i]
-						for j := 0; j < NB_NODES - 1; j++ {
-							if (r.PhilosopherId == p.ForkId[j] && p.ForkStatus[j] == true) {
-								p.ForkStatus[j] = false
-								p.sendFork(r.PhilosopherId)
-								break
-							}
-						}
-					}
-					p.Queue = nil
-					for j := 0; j < NB_NODES - 1; j++ {
-						if (p.ForkStatus[j] == true) {
-							p.ForkStatus[j] = false
-							p.sendFork(p.ForkId[j])
-						}
-					}
-				}
-			}
-		} else {
-			log.Print("already thinking")
 		}
+	} else {
+		log.Print("already eating")
 	}
-
-	log.Print("Philosopher #", p.Id," END")	
+	
+	log.Print("Philosopher #", p.Id," END RequestCS")	
 }
 
 func (p *Philosopher) ChandyMisra(wg *sync.WaitGroup) {
 	log.Print("Philosopher #", p.Id)
 
 	go p.RequestCS()
-	go p.waitForReplies()
+	go p.WaitForReplies()
 	for {
 		time.Sleep(100 * time.Millisecond)
 		if CURRENT_ITERATION == NB_ITERATIONS {
@@ -298,57 +300,50 @@ func (p *Philosopher) ChandyMisra(wg *sync.WaitGroup) {
 	wg.Done()
 }
 
-func main() {
-	// var philosophers = make([]Philosopher, NB_NODES)
-	philosophers = make([]Philosopher, NB_NODES)
-	var wg sync.WaitGroup
+func InitPhilosopher(p *Philosopher, id int, nbNodes int) {
+	p.Id = id
+	p.NbCS = 0
+	p.State = STATE_THINKING
+	p.ForkId  = make([]int, nbNodes)
+	p.ForkStatus  = make([]bool, nbNodes - 1)
+	p.ForkClean  = make([]bool, nbNodes - 1)
+	var idx int = 0
+	for j := 0; j < nbNodes; j++ {
+		if j == p.Id {
+			// skip my own ID
+			continue
+		} else {
+			p.ForkId[idx] = j
+			idx++
+		}
+	}
+	// Initially forks are in the hand of the Philosophers with id lower than the fork id to make graphs acyclic
+	// Initially all forks are dirty
+	for j := 0; j < nbNodes - 1; j++ {
+		if p.ForkId[j] < id {
+			p.ForkStatus[j]    = false
+		} else {
+			p.ForkStatus[j]    = true
+		}
+		p.ForkClean[j]     = false
+	}
+	
+	p.Initialized = true
+}
+
+func Init() {
+	log.Print("ChandyMisra.Init")	
+	Philosophers = make([]Philosopher, NB_NODES)
 	var messages  = make([]chan string, NB_NODES)
 	
 	log.Print("nb_process #", NB_NODES)
 	
 	for i := 0; i < NB_NODES; i++ {
-		philosophers[i].Id = i
-		philosophers[i].NbCS = 0
-		philosophers[i].State = STATE_THINKING
-		philosophers[i].ForkId  = make([]int, NB_NODES - 1)
-		philosophers[i].ForkStatus  = make([]bool, NB_NODES - 1)
-		philosophers[i].ForkClean  = make([]bool, NB_NODES - 1)
-		var idx int = 0
-		for j := 0; j < NB_NODES; j++ {
-			if j == philosophers[i].Id {
-				// skip my own ID
-				continue
-			} else {
-				philosophers[i].ForkId[idx] = j
-				idx++
-			}
-		}
-		// Initially forks are in the hand of the philosophers with id lower than the fork id to make graphs acyclic
-		// Initially all forks are dirty
-		for j := 0; j < NB_NODES - 1; j++ {
-			if philosophers[i].ForkId[j] < i {
-				philosophers[i].ForkStatus[j]    = false
-			} else {
-				philosophers[i].ForkStatus[j]    = true
-			}
-			philosophers[i].ForkClean[j]     = false
-		}
-
+		InitPhilosopher(&Philosophers[i], i , NB_NODES)
 		messages[i] = make(chan string)
-		philosophers[i].Initialized = true
 	}
 
 	for i := 0; i < NB_NODES; i++ {
-		philosophers[i].Messages = messages
+		Philosophers[i].Messages = messages
 	}
-
-	for i := 0; i < NB_NODES; i++ {
-		wg.Add(1)
-		go philosophers[i].ChandyMisra(&wg)
-	}
-	wg.Wait()
-	for i := 0; i < NB_NODES; i++ {
-		log.Print("Philosopher #", philosophers[i].Id," entered CS ", philosophers[i].NbCS," time")	
-	}
-	log.Print(NB_MSG, " messages sent")
 }
