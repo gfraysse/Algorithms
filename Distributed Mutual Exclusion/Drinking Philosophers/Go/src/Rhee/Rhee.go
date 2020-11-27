@@ -4,15 +4,15 @@
 TODO: 
 - finalize implementation: 
     - a queue of pending messages seems to be necessary, 
-    - the numbering of requests is limited by the marshal/unmarshal methods
 - code duplication: WaitForReplies, RequestCMCS, enterCMCSIfICan between this and ChandyMisra.go files, find best workaround for Go lack of OO overrinding of methods
 
 How-to run: 
   go run rhee.go 2>&1  |tee /tmp/tmp.log
 
 Parameters:
-- Number of nodes is set with NB_NODES global variable
-- Number of iterations is hardcoded in main function
+- Number of nodes 
+- Number of iterations 
+- Size of requests: a constant, all requests have the same size
 */ 
 
 /*
@@ -42,10 +42,7 @@ import (
 )
 
 /* global variable declaration */
-var NB_NODES          int = 4
-var REQUEST_SIZE      int = 2
 var NB_MSG            int = 0
-var NB_ITERATIONS     int = 10
 var CURRENT_ITERATION int = 0
 
 var STATE_THINKING    int = 0
@@ -74,7 +71,7 @@ var Logger = log.New()
 
 // Debug function
 func displayNodes() {
-	for i := 0; i < NB_NODES; i++ {
+	for i := 0; i < Nodes[0].Philosopher.NbNodes; i++ {
 		Logger.Debug("  N#", Nodes[i].Philosopher.Id, ", inCMCS #", Nodes[i].InCMCS, ", inRheeCS=", Nodes[i].InRheeCS)
 		for key, element := range Nodes[i].PositionSelected {
 			Logger.Debug("Request:", key, "=>", "Position:", element)
@@ -114,6 +111,7 @@ type Node struct {
 	nbMarkedRcv          int
 	nbGrantRcv           int
 	PositionSelected     map[int]int
+	requestSize          int
 }
 
 ////////////////////////////////////////////////////////////
@@ -212,7 +210,7 @@ func (n *Node) ReleaseCMCS(request Request) {
 	for i := 0; i < len(n.Philosopher.Queue); i++ {
 		var r ChandyMisra.ForkRequest
 		r = n.Philosopher.Queue[i]
-		for j := 0; j < NB_NODES - 1; j++ {
+		for j := 0; j < n.Philosopher.NbNodes - 1; j++ {
 			if (r.PhilosopherId == n.Philosopher.ForkId[j] && n.Philosopher.ForkStatus[j] == true) {
 				n.Philosopher.ForkStatus[j] = false
 				go n.SendFork(r.PhilosopherId, request)
@@ -221,7 +219,7 @@ func (n *Node) ReleaseCMCS(request Request) {
 		}
 	}
 	n.Philosopher.Queue = nil
-	for j := 0; j < NB_NODES - 1; j++ {
+	for j := 0; j < n.Philosopher.NbNodes - 1; j++ {
 		if (n.Philosopher.ForkStatus[j] == true) {
 			n.Philosopher.ForkStatus[j] = false
 			go n.SendFork(n.Philosopher.ForkId[j], request)
@@ -261,15 +259,15 @@ func (n *Node) sendRequest(request Request, destination int) {
 func (n *Node) buildRequest() Request {
 	var request Request
 	request.MessageType = REQ_TYPE
-	var resources = make([]int, NB_NODES)
-	for j := 0; j < NB_NODES; j++ {
+	var resources = make([]int, n.Philosopher.NbNodes)
+	for j := 0; j < n.Philosopher.NbNodes; j++ {
 		resources[j] = j
 	}
 	request.RequesterNodeId = n.Philosopher.Id
 	request.RequestId = n.RequestIdCounter
 	n.RequestIdCounter ++
-	request.ResourceId = make([]int, REQUEST_SIZE)
-	for k := 0; k < REQUEST_SIZE; k++ {
+	request.ResourceId = make([]int, n.requestSize)
+	for k := 0; k < n.requestSize; k++ {
 		rand.Seed(time.Now().UnixNano())
 		var idx int = rand.Intn(len(resources))
 		request.ResourceId[k] = resources[idx]
@@ -533,7 +531,7 @@ func (n *Node) receiveDec(request Request) {
 func (n *Node) enterCMCSIfICan(request Request) {
 	var hasSentReq bool = false
 	log.Print("Node #", n.Philosopher.Id, ", checking if forks are missing")
-	for j := 0; j < NB_NODES - 1; j++ {
+	for j := 0; j < n.Philosopher.NbNodes - 1; j++ {
 		if n.Philosopher.ForkStatus[j] == false {
 			go n.RequestFork(n.Philosopher.ForkId[j], request)
 			hasSentReq = true
@@ -545,7 +543,7 @@ func (n *Node) enterCMCSIfICan(request Request) {
 		if n.Philosopher.State == STATE_HUNGRY {
 			var allGreen = true
 			
-			for i := 0; i < NB_NODES - 1; i ++ {
+			for i := 0; i < n.Philosopher.NbNodes - 1; i ++ {
 				allGreen = allGreen && n.Philosopher.ForkStatus[i] && n.Philosopher.ForkClean[i]
 				if allGreen == false {
 					// log.Print("Node #", n.Philosopher.Id, " waiting for fork", n.Philosopher.ForkId[i])
@@ -620,7 +618,7 @@ func (n *Node) rcv() {
 			} else if (request.MessageType == REQUEST_FORK) {
 				// Logger.Info("Node #", n.Philosopher.Id, ", received REQUEST_FORK from Node #", requester, ",", msg)
 				Logger.Info("Node #", n.Philosopher.Id, ", received REQUEST_FORK from Node #", requester)
-				for i := 0; i < NB_NODES - 1; i ++ {
+				for i := 0; i < n.Philosopher.NbNodes - 1; i ++ {
 					if requester == n.Philosopher.ForkId[i] {
 						if n.Philosopher.ForkStatus[i] == true {
 							if n.Philosopher.ForkClean[i] == true {
@@ -646,7 +644,7 @@ func (n *Node) rcv() {
 				// Logger.Info("Node #", n.Philosopher.Id, ", received SEND_FORK from Node #", requester, ",", msg)
 				Logger.Info("Node #", n.Philosopher.Id, ", received SEND_FORK from Node #", requester)
 				log.Print(requester, ": ", n.Philosopher.Id, " <==== ", requester)	
-				for i := 0; i < NB_NODES - 1; i ++ {
+				for i := 0; i < n.Philosopher.NbNodes - 1; i ++ {
 					if (requester == n.Philosopher.ForkId[i]) {
 						n.Philosopher.ForkStatus[i]    = true
 						n.Philosopher.ForkClean[i]     = true
@@ -669,7 +667,7 @@ func (n *Node) handleRequest(request Request) {
 	} else if n.Philosopher.State == STATE_HUNGRY {
 		var allGreen = true
 
-		for i := 0; i < NB_NODES - 1; i ++ {
+		for i := 0; i < n.Philosopher.NbNodes - 1; i ++ {
 			allGreen = allGreen && n.Philosopher.ForkStatus[i] && n.Philosopher.ForkClean[i]
 			if allGreen == false {
 				// Logger.Info("Node #", n.Philosopher.Id, " waiting for fork", n.forkId[i])
@@ -698,7 +696,7 @@ func (n *Node) RequestCMCS(request Request) {
 	if n.Philosopher.State == STATE_THINKING {
 		n.Philosopher.State = STATE_HUNGRY
 		log.Print("Node #", n.Philosopher.Id, " wants to enter CS")
-		for j := 0; j < NB_NODES - 1; j++ {
+		for j := 0; j < n.Philosopher.NbNodes - 1; j++ {
 			if n.Philosopher.ForkStatus[j] == false {
 				n.RequestFork(n.Philosopher.ForkId[j], request)
 				break
@@ -764,48 +762,49 @@ func (n *Node) Rhee(wg *sync.WaitGroup) {
 	go n.rcv()
 	for {
 		time.Sleep(100 * time.Millisecond)
-		if CURRENT_ITERATION == NB_ITERATIONS {
+		if CURRENT_ITERATION == n.Philosopher.NbIterations {
 			break
 		}
 	}
 
-	Logger.Info("Node #", n.Philosopher.Id," END after ", NB_ITERATIONS," CS entries")	
+	Logger.Info("Node #", n.Philosopher.Id," END after ", n.Philosopher.NbIterations," CS entries")	
 	wg.Done()
 }
 
-func Init() {
+func Init(nbNodes int, nbIterations int, requestSize int) {
 	Logger.SetLevel(log.DebugLevel)
 	// Logger.SetLevel(log.InfoLevel)
 	Logger.Print("Rhee.Init")	
-	ChandyMisra.Init()
+	ChandyMisra.Init(nbNodes, nbIterations)
 
 	gob.Register(Node{})
 	
-	Nodes = make([]Node, NB_NODES)
-	var messages = make([]chan bytes.Buffer, NB_NODES)
-	var philosopherMessages = make([]chan string, NB_NODES)
-	var has_received_advance = make([]bool, NB_NODES)
-	var has_dec_sent = make([]bool, NB_NODES)
+	Nodes = make([]Node, nbNodes)
+	var messages = make([]chan bytes.Buffer, nbNodes)
+	var philosopherMessages = make([]chan string, nbNodes)
+	var has_received_advance = make([]bool, nbNodes)
+	var has_dec_sent = make([]bool, nbNodes)
 
-	Logger.Info("nb_process #", NB_NODES)
+	Logger.Info("nb_process #", nbNodes)
 	
-	for i := 0; i < NB_NODES; i++ {		
-		ChandyMisra.InitPhilosopher(&Nodes[i].Philosopher, i , NB_NODES)
+	for i := 0; i < nbNodes; i++ {		
+		ChandyMisra.InitPhilosopher(&Nodes[i].Philosopher, i , nbNodes, nbIterations)
 		philosopherMessages[i] = make(chan string)
 		messages[i] = make(chan bytes.Buffer)
 		Nodes[i].RequestIdCounter = i * 100
 		Nodes[i].PositionSelected = make(map[int]int)
 		Nodes[i].Occupant = make(map[int]int)
-		Nodes[i].Has_received_advance = make([]bool, NB_NODES)
-		Nodes[i].Has_dec_sent = make([]bool, NB_NODES)
+		Nodes[i].Has_received_advance = make([]bool, nbNodes)
+		Nodes[i].Has_dec_sent = make([]bool, nbNodes)
 		Nodes[i].Rm_critical = false
 		Nodes[i].Req_report = false
+		Nodes[i].requestSize = requestSize
 		// occupants[i] = EMPTY
 		has_received_advance[i] = false
 		has_dec_sent[i] = false
 	}
 
-	for i := 0; i < NB_NODES; i++ {
+	for i := 0; i < nbNodes; i++ {
 		Nodes[i].Philosopher.Messages = philosopherMessages
 		Nodes[i].Messages = messages
 		copy(Nodes[i].Has_received_advance, has_received_advance)

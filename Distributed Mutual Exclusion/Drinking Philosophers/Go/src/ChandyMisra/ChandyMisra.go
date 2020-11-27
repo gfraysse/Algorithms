@@ -2,11 +2,11 @@
   Copyright "Guillaume Fraysse <gfraysse dot spam plus code at gmail dot com>"
 
 How-to run: 
-  go run drinking_philosophers_chandy-misra.go 2>&1 |tee /tmp/tmp.log
+  go run ChandyMisra.go 2>&1 |tee /tmp/tmp.log
 
 Parameters:
-- Number of nodes is set with NB_NODES global variable
-- Number of iterations is hardcoded in main function
+- Number of nodes
+- Number of iterations
 */ 
 
 /*
@@ -31,9 +31,7 @@ import (
 )
 
 /* global variable declaration */
-var NB_NODES          int = 4
 var NB_MSG            int = 0
-var NB_ITERATIONS     int = 10
 var CURRENT_ITERATION int = 0
 
 var STATE_THINKING    int = 0
@@ -54,11 +52,11 @@ func displayNodes() {
 */
 
 func checkSanity() {
-	for i := 0; i < NB_NODES; i++ {
+	for i := 0; i < Philosophers[0].NbNodes; i++ {
 		// Sanity check, it I don't have a fork, check if the owner actually has it, if I have it check it is not owned by the other
-		for j := 0; j < NB_NODES - 1; j ++ {
+		for j := 0; j < Philosophers[0].NbNodes - 1; j ++ {
 			var idx int = Philosophers[i].ForkId[j]
-			for k := 0; k < NB_NODES - 1; k ++ {
+			for k := 0; k < Philosophers[0].NbNodes - 1; k ++ {
 				if Philosophers[i].ForkId[j] == Philosophers[idx].ForkId[k] {
 					if Philosophers[i].ForkStatus[j] == Philosophers[idx].ForkStatus[k] {
 						log.Print("ERR Sanity Check expected philosopher #", i, " fork#", j, " status = ", Philosophers[i].ForkStatus[j], ", philosopher#", idx, ", fork #", k, " status=", Philosophers[idx].ForkStatus[k])
@@ -76,15 +74,17 @@ type ForkRequest struct {
 }
 
 type Philosopher struct {
-	Id              int
-	Initialized     bool
-	ForkId          []int
-	ForkClean       []bool
-	ForkStatus      []bool
-	State           int
-	NbCS            int
-	Queue           []ForkRequest
-	Messages        []chan string
+	Id           int
+	Initialized  bool
+	ForkId       []int
+	ForkClean    []bool
+	ForkStatus   []bool
+	State        int
+	NbCS         int
+	Queue        []ForkRequest
+	Messages     []chan string
+	NbNodes      int
+	NbIterations int
 }
 
 func (p *Philosopher) String() string {
@@ -120,7 +120,7 @@ func (p *Philosopher) ExecuteCSCode() {
 func (p *Philosopher) ReleaseCS() {
 	log.Print("Philosopher #", p.Id," Philosopher.ReleaseCS #########################")	
 	p.State = STATE_THINKING
-	for i := 0; i < NB_NODES - 1; i ++ {
+	for i := 0; i < p.NbNodes - 1; i ++ {
 		p.ForkClean[i] = false
 	}
 	checkSanity()
@@ -154,7 +154,7 @@ func (p *Philosopher) SendFork(philosopherId int) {
 func (p *Philosopher) enterCSIfICan() {	
 	var hasSentReq bool = false
 	log.Print("Philosopher #", p.Id, ", checking if forks are missing")
-	for j := 0; j < NB_NODES - 1; j++ {
+	for j := 0; j < p.NbNodes - 1; j++ {
 		if p.ForkStatus[j] == false {
 			go p.RequestFork(p.ForkId[j])
 			hasSentReq = true
@@ -166,7 +166,7 @@ func (p *Philosopher) enterCSIfICan() {
 		if p.State == STATE_HUNGRY {
 			var allGreen = true
 			
-			for i := 0; i < NB_NODES - 1; i ++ {
+			for i := 0; i < p.NbNodes - 1; i ++ {
 				allGreen = allGreen && p.ForkStatus[i] && p.ForkClean[i]
 				if allGreen == false {
 					// log.Print("Philosopher #", p.Id, " waiting for fork", p.ForkId[i])
@@ -184,7 +184,7 @@ func (p *Philosopher) enterCSIfICan() {
 					for i := 0; i < len(p.Queue); i++ {
 						var r ForkRequest
 						r = p.Queue[i]
-						for j := 0; j < NB_NODES - 1; j++ {
+						for j := 0; j < p.NbNodes - 1; j++ {
 							if (r.PhilosopherId == p.ForkId[j] && p.ForkStatus[j] == true) {
 								p.ForkStatus[j] = false
 								go p.SendFork(r.PhilosopherId)
@@ -193,7 +193,7 @@ func (p *Philosopher) enterCSIfICan() {
 						}
 					}
 					p.Queue = nil
-					for j := 0; j < NB_NODES - 1; j++ {
+					for j := 0; j < p.NbNodes - 1; j++ {
 						if (p.ForkStatus[j] == true) {
 							p.ForkStatus[j] = false
 							go p.SendFork(p.ForkId[j])
@@ -219,7 +219,7 @@ func (p *Philosopher) WaitForReplies() {
 				if err != nil {
 					log.Fatal(err)
 				}
-				for i := 0; i < NB_NODES - 1; i ++ {
+				for i := 0; i < p.NbNodes - 1; i ++ {
 					if requester == p.ForkId[i] {
 						if p.ForkStatus[i] == true {
 							if p.ForkClean[i] == true {
@@ -248,7 +248,7 @@ func (p *Philosopher) WaitForReplies() {
 				}
 				log.Print("Philosopher #", p.Id, ", RECEIVED fork from Philosopher #", sender, ", ", msg)
 				log.Print(sender, ": ", p.Id, " <==== ", sender)	
-				for i := 0; i < NB_NODES - 1; i ++ {
+				for i := 0; i < p.NbNodes - 1; i ++ {
 					if (sender == p.ForkId[i]) {
 						p.ForkStatus[i]    = true
 						p.ForkClean[i]     = true
@@ -269,7 +269,7 @@ func (p *Philosopher) RequestCS() {
 	if p.State == STATE_THINKING {
 		p.State = STATE_HUNGRY
 		log.Print("Philosopher #", p.Id, " wants to enter CS")
-		for j := 0; j < NB_NODES - 1; j++ {
+		for j := 0; j < p.NbNodes - 1; j++ {
 			if p.ForkStatus[j] == false {
 				go p.RequestFork(p.ForkId[j])
 				break
@@ -291,18 +291,20 @@ func (p *Philosopher) ChandyMisra(wg *sync.WaitGroup) {
 	go p.WaitForReplies()
 	for {
 		time.Sleep(100 * time.Millisecond)
-		if CURRENT_ITERATION == NB_ITERATIONS {
+		if CURRENT_ITERATION == p.NbIterations {
 			break
 		}
 	}
 
-	log.Print("Philosopher #", p.Id," END after ", NB_ITERATIONS," CS entries")	
+	log.Print("Philosopher #", p.Id," END after ", p.NbIterations, " CS entries")	
 	wg.Done()
 }
 
-func InitPhilosopher(p *Philosopher, id int, nbNodes int) {
+func InitPhilosopher(p *Philosopher, id int, nbNodes int, nbIterations int) {
 	p.Id = id
 	p.NbCS = 0
+	p.NbNodes = nbNodes
+	p.NbIterations = nbIterations
 	p.State = STATE_THINKING
 	p.ForkId  = make([]int, nbNodes)
 	p.ForkStatus  = make([]bool, nbNodes - 1)
@@ -331,19 +333,19 @@ func InitPhilosopher(p *Philosopher, id int, nbNodes int) {
 	p.Initialized = true
 }
 
-func Init() {
+func Init(nbNodes int, nbIterations int) {
 	log.Print("ChandyMisra.Init")	
-	Philosophers = make([]Philosopher, NB_NODES)
-	var messages  = make([]chan string, NB_NODES)
+	Philosophers = make([]Philosopher, nbNodes)
+	var messages  = make([]chan string, nbNodes)
 	
-	log.Print("nb_process #", NB_NODES)
+	log.Print("nb_process #", nbNodes)
 	
-	for i := 0; i < NB_NODES; i++ {
-		InitPhilosopher(&Philosophers[i], i , NB_NODES)
+	for i := 0; i < nbNodes; i++ {
+		InitPhilosopher(&Philosophers[i], i , nbNodes, nbIterations)
 		messages[i] = make(chan string)
 	}
 
-	for i := 0; i < NB_NODES; i++ {
+	for i := 0; i < nbNodes; i++ {
 		Philosophers[i].Messages = messages
 	}
 }

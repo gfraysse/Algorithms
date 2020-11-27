@@ -25,6 +25,7 @@ package main
 import (
 	// "bufio"
 	"bytes" // for gid
+	"encoding/gob"
 	"fmt"
 	log "github.com/sirupsen/logrus"
 	"math/rand"
@@ -52,8 +53,6 @@ var INQUIRE_TYPE  int = 4
 var ACK1_TYPE     int = 5
 var ACK2_TYPE     int = 6
 
-// var br = bufio.NewWriter(os.Stdout)
-// var logger = log.New(br, "", log.LstdFlags)
 var logger = log.New()
 /*
 // Debug function
@@ -76,10 +75,10 @@ type ControlToken struct {
 var ControlTokenInstance ControlToken
 
 type Request struct {
-	requesterNodeId int
-	requestId      int
-	messageType    int
-	resourceId     []int
+	RequesterNodeId int
+	RequestId      int
+	MessageType    int
+	ResourceId     []int
 }
 
 type Node struct {
@@ -91,8 +90,7 @@ type Node struct {
 	requesting                bool
 	currentlyRequestingTokens []int
 	currentRequest            Request
-	// messageWaitingForRequest  *Request
-	requestIdCounter          int
+	RequestIdCounter          int
 	waitingSet                map[int][]int
 	next                      int // the dynamic distributed list
 	last                      int // called father in the original paper. Called last here as in Sopena et al. as it stores the last requester
@@ -102,7 +100,7 @@ type Node struct {
 	mutex          sync.Mutex
 	nbCS           int // the number of time the node entered its Critical Section
 	queue          []Request
-	messages       []chan []byte
+	messages       []chan bytes.Buffer
 }
 
 ////////////////////////////////////////////////////////////
@@ -121,57 +119,34 @@ func getGID() uint64 {
 ////////////////////////////////////////////////////////////
 // Utility functions
 ////////////////////////////////////////////////////////////
-func UnmarshalRequest(text []byte, request *Request) error {
-	request.requesterNodeId = int(text[0])
-	request.requestId      = int(text[1])
-	request.messageType    = int(text[2])
+func UnmarshalRequest(b bytes.Buffer, request *Request) error {
+	dec := gob.NewDecoder(&b)
 
+	error := dec.Decode(request)
 
-	if request.messageType == REQ_CT_TYPE {
-	} else if request.messageType == REQ_TYPE || request.messageType == INQUIRE_TYPE || request.messageType == ACK1_TYPE {
-		request.resourceId = make ([]int, REQUEST_SIZE)
-		
-		for i := 0; i < REQUEST_SIZE; i++ {
-			var val int = int(text[3 + i])
-			if val == 255 {
-				val = -1
-			}
-			request.resourceId[i] = val
-		}
-	}
-	
-	return nil
+	return error
 }
 
-func MarshalRequest(request Request) ([]byte, error) {
-	var ret = make ([]byte, 3 + REQUEST_SIZE)
+func MarshalRequest(request Request) (bytes.Buffer, error) {
+	var buffer bytes.Buffer        
+	enc := gob.NewEncoder(&buffer) 
+	error := enc.Encode(request)
 
-	ret[0] = byte(request.requesterNodeId)
-	ret[1] = byte(request.requestId)
-	ret[2] = byte(request.messageType)
-
-	if request.messageType == REQ_CT_TYPE {
-	} else if request.messageType == REQ_TYPE || request.messageType == INQUIRE_TYPE || request.messageType == ACK1_TYPE {
-		for i := 0; i < REQUEST_SIZE; i++ {
-			ret[3 + i] = byte(request.resourceId[i])
-		}
-	}
-		
-	return ret, nil
+	return buffer, error
 }
 
 func (r *Request) String() string {
 	var val string
 	var res string = ""
 
-	for i := 0; i < len(r.resourceId); i ++ {
-		res +=  strconv.Itoa(r.resourceId[i]) + ", "
+	for i := 0; i < len(r.ResourceId); i ++ {
+		res +=  strconv.Itoa(r.ResourceId[i]) + ", "
 	}
 
 	val = fmt.Sprintf("Request #=%d, requester node=%d, messageType=%d, resources={%s}",
-		r.requestId,
-		r.requesterNodeId,
-		r.messageType,
+		r.RequestId,
+		r.RequesterNodeId,
+		r.MessageType,
 		res)
 	return val
 }
@@ -324,7 +299,7 @@ func (ct *ControlToken) updateForRequest(
 	
 	// Remove needed tokens from A
 	// ct.removeNeededTokensFromFreeTokens(requestedTokens, tokensOwned);
-	n.tokensNeeded = request.resourceId
+	n.tokensNeeded = request.ResourceId
 	logger.Debug("Node #", n.id, ", n.tokensNeeded", n.tokensNeeded, ", routine #", getGID())
 	ct.removeNeededTokensFromFreeTokens(n);
 	logger.Debug("Node #", n.id, ", n.tokensNeeded 2", n.tokensNeeded, ", routine #", getGID())
@@ -344,8 +319,8 @@ func (ct *ControlToken) updateForRequest(
 	
 	logger.Debug("Node #", n.id, ", ControlToken.updateForRequest requestedResourcesForNode ", requestedResourcesForNode, ", routine #", getGID())
 	logger.Debug("Node #", n.id, ", missingTokens", missingTokens)
-	for i := 0; i < len(request.resourceId); i++ {
-		var token int = request.resourceId[i]
+	for i := 0; i < len(request.ResourceId); i++ {
+		var token int = request.ResourceId[i]
 		if ct.isTokenPossessedByNode(token) {
 			logger.Debug("Node #", n.id, ", isTokenPossessedByNode true")
 			var owner int = ct.getTokenOwnerFromPossessedByNode(token);
@@ -375,7 +350,6 @@ func (ct *ControlToken) updateForRequest(
 	var found bool = ct.checkCT()
 	if found == false {
 		logger.Debug("Node #", n.id, " !!!! ControlToken.updateForRequest inconsistent ControlToken !!!!", ", routine #", getGID())
-		// br.Flush()
 		os.Exit(1)
 	}
 	logger.Debug("Node #", n.id, ", END ControlToken.updateForRequest", ct.String(), ", routine #", getGID())
@@ -427,7 +401,6 @@ func (n *Node) leaveBLCS() {
 		}
 	}
 	n.waitingSet = make(map[int][]int)
-	// n.messageWaitingForRequest = nil
 	
 	if n.has_CT == true {
 		var tokensPossessedByNode []int = ControlTokenInstance.getTokensPossessedByNode(n)
@@ -437,7 +410,6 @@ func (n *Node) leaveBLCS() {
 			var found bool = ControlTokenInstance.checkCT()
 			if found == false {
 				logger.Debug("Node #", n.id, "!!!! leaveBLCS inconsistent ControlToken !!!!", ", routine #", getGID())
-				// br.Flush()
 				os.Exit(1)
 			}
 		}
@@ -471,15 +443,16 @@ func (n *Node) lockResource(id int) {
 
 func (n *Node) sendCT(dst int) {
 	var request Request
-	request.requesterNodeId = n.id
-	request.requestId = 0
-	request.messageType = REP_CT_TYPE
+	request.RequesterNodeId = n.id
+	request.RequestId = 0
+	request.MessageType = REP_CT_TYPE
 	
 	content, err := MarshalRequest(request)
 	if err != nil {
 		logger.Fatal(err)
 	}			
-	logger.Debug("Node #", n.id, ",  SEND CT #", request.requestId, ":", content, " to Node #", dst, ", routine #", getGID())	
+	// logger.Debug("Node #", n.id, ",  SEND CT #", request.RequestId, ":", content, " to Node #", dst, ", routine #", getGID())	
+	logger.Debug("Node #", n.id, ",  SEND CT #", request.RequestId, " to Node #", dst, ", routine #", getGID())	
 	n.has_CT = false
 	n.messages[dst] <- content
 }
@@ -488,24 +461,25 @@ func (n *Node) handleCTRequest(request Request) {
 	logger.Debug("Node #", n.id, ",  handleCTRequest request:", request.String(), ", routine #", getGID())
 	if n.last == -1 {
 		if n.requesting {
-			n.next = request.requesterNodeId
+			n.next = request.RequesterNodeId
 		} else {
-			go n.sendCT(request.requesterNodeId)
+			go n.sendCT(request.RequesterNodeId)
 		}		
 	} else {
 		// Code duplication to remove
 		var fwdRequest Request
-		fwdRequest.messageType = REQ_CT_TYPE
-		fwdRequest.requesterNodeId = request.requesterNodeId
+		fwdRequest.MessageType = REQ_CT_TYPE
+		fwdRequest.RequesterNodeId = request.RequesterNodeId
 		
 		content, err := MarshalRequest(fwdRequest)
 		if err != nil {
 			logger.Fatal(err)
 		}			
-		logger.Debug("Node #", n.id, ",  FWD REQUEST CT #", request.requestId, ":", content, " to Node #", n.last)	
+		// logger.Debug("Node #", n.id, ",  FWD REQUEST CT #", request.RequestId, ":", content, " to Node #", n.last)	
+		logger.Debug("Node #", n.id, ",  FWD REQUEST CT #", request.RequestId, " to Node #", n.last)	
 		n.messages[n.last] <- content
 	}
-	n.last = request.requesterNodeId
+	n.last = request.RequesterNodeId
 	logger.Debug("Node #", n.id, " handleCTRequest, *update* n.last #", n.last)
 }
 
@@ -518,7 +492,7 @@ func (n *Node) enterBLCS(request Request) bool {
 }
 
 func (n *Node) hasAllTokensForRequest(request Request) bool {
-	var resourcesRequested []int = request.resourceId
+	var resourcesRequested []int = request.ResourceId
 
 	for i := 0; i < len(resourcesRequested); i++ {
 		var hasToken bool = false
@@ -547,7 +521,6 @@ func (n *Node) enterCSIfCan(request Request) bool {
 
 		// Send the Control Token
 		n.requesting = false
-		// n.messageWaitingForRequest = nil
 		
 		// Finished using the Control Token, keep it going if there is a Next
 		if n.next != -1 {
@@ -565,26 +538,26 @@ func (n *Node) requestTokens(request Request, dst int, tokens[]int) {
 	logger.Debug("Node #", n.id, ", requestTokens")
 	n.currentlyRequestingTokens = tokens
 	var inquireRequest Request
-	inquireRequest.messageType = INQUIRE_TYPE
-	inquireRequest.requestId = request.requestId
-	inquireRequest.requesterNodeId = n.id
+	inquireRequest.MessageType = INQUIRE_TYPE
+	inquireRequest.RequestId = request.RequestId
+	inquireRequest.RequesterNodeId = n.id
 		
-	inquireRequest.resourceId = make([]int, REQUEST_SIZE)
+	inquireRequest.ResourceId = make([]int, REQUEST_SIZE)
 	for i := 0; i < len(tokens); i++ {
-		inquireRequest.resourceId[i] = tokens[i]
+		inquireRequest.ResourceId[i] = tokens[i]
 	}
 	if len(tokens) != REQUEST_SIZE {
 		for i := len(tokens); i < REQUEST_SIZE; i++ {
-			inquireRequest.resourceId[i] = -1
+			inquireRequest.ResourceId[i] = -1
 		}
 	}
 	content, err := MarshalRequest(inquireRequest)
 	if err != nil {
 		logger.Fatal(err)
 	}			
-	logger.Debug("Node #", n.id, ", send INQUIRE #", inquireRequest.requestId, ":", content, " to Node #", dst, " for res ", tokens)	
+	// logger.Debug("Node #", n.id, ", send INQUIRE #", inquireRequest.RequestId, ":", content, " to Node #", dst, " for res ", tokens)	
+	logger.Debug("Node #", n.id, ", send INQUIRE #", inquireRequest.RequestId, " to Node #", dst, " for res ", tokens)	
 	n.messages[dst] <- content
-	// fmt.Println("Key:", key, "Value:", value)
 }
 
 func (n *Node) addTokenToSet(token Token, status bool) {
@@ -639,14 +612,14 @@ func (n *Node) handleRequest(request Request) {
 	logger.Debug("Node #", n.id," handleRequest")	
 	var hasAllTokens bool = true
 	for i := 0; i < REQUEST_SIZE; i++ {
-		if ! n.ownsToken(request.resourceId[i]) {
+		if ! n.ownsToken(request.ResourceId[i]) {
 			hasAllTokens = false
 		}
 	}
 	if hasAllTokens {
 		logger.Debug("Node #", n.id," handleRequest hasAllTokens")	
 		for i := 0; i < REQUEST_SIZE; i++ {
-			n.lockResource(request.resourceId[i])
+			n.lockResource(request.ResourceId[i])
 		}
 		n.enterCSIfCan(request)
 	} else {
@@ -709,11 +682,11 @@ func (n *Node) isTokenNeeded(token int) bool{
 func (n *Node) receiveInquire(request Request) {
 	logger.Debug("** Node #", n.id, "  receiveInquire ******************")
 
-	var requester int = request.requesterNodeId
+	var requester int = request.RequesterNodeId
 	var sentTokens []int
 	var notSentTokens []int
-	for i := 0; i < len(request.resourceId); i++ {
-		var token int = request.resourceId[i]
+	for i := 0; i < len(request.ResourceId); i++ {
+		var token int = request.ResourceId[i]
 		logger.Debug("** Node #", n.id, "  receiveInquire i=", i, " token=", token)
 		if token != -1 {
 			if n.isTokenInSet(token) && !n.isTokenLocked(token) {
@@ -741,51 +714,53 @@ func (n *Node) receiveInquire(request Request) {
 
 func (n *Node) sendACK1(sentTokens *([]int), dst int) {
 	var ack1Request Request
-	ack1Request.messageType = ACK1_TYPE
-	ack1Request.requesterNodeId = n.id
+	ack1Request.MessageType = ACK1_TYPE
+	ack1Request.RequesterNodeId = n.id
 		
-	ack1Request.resourceId = make([]int, REQUEST_SIZE)
+	ack1Request.ResourceId = make([]int, REQUEST_SIZE)
 	for i := 0; i < len(*sentTokens); i++ {
-		ack1Request.resourceId[i] = (*sentTokens)[i]
+		ack1Request.ResourceId[i] = (*sentTokens)[i]
 	}
 	if len(*sentTokens) != REQUEST_SIZE {
 		for i := len(*sentTokens); i < REQUEST_SIZE; i++ {
-			ack1Request.resourceId[i] = -1
+			ack1Request.ResourceId[i] = -1
 		}
 	}
 	content, err := MarshalRequest(ack1Request)
 	if err != nil {
 		logger.Fatal(err)
 	}			
-	logger.Debug("Node #", n.id, ", send ACK1 #", ack1Request.requestId, ":", content, " to Node #", dst, " with tokens", ack1Request.resourceId, ", routine #", getGID())	
+	// logger.Debug("Node #", n.id, ", send ACK1 #", ack1Request.RequestId, ":", content, " to Node #", dst, " with tokens", ack1Request.ResourceId, ", routine #", getGID())	
+	logger.Debug("Node #", n.id, ", send ACK1 #", ack1Request.RequestId, " to Node #", dst, " with tokens", ack1Request.ResourceId, ", routine #", getGID())	
 	n.messages[dst] <- content
 }
 
 func (n *Node) sendACK2(tokens *([]int), dst int) {
 	var ack2Request Request
-	ack2Request.messageType = ACK2_TYPE
-	ack2Request.requesterNodeId = n.id
+	ack2Request.MessageType = ACK2_TYPE
+	ack2Request.RequesterNodeId = n.id
 		
-	ack2Request.resourceId = make([]int, REQUEST_SIZE)
+	ack2Request.ResourceId = make([]int, REQUEST_SIZE)
 	for i := 0; i < len(*tokens); i++ {
-		ack2Request.resourceId[i] = (*tokens)[i]
+		ack2Request.ResourceId[i] = (*tokens)[i]
 	}
 	if len(*tokens) != REQUEST_SIZE {
 		for i := len(*tokens); i < REQUEST_SIZE; i++ {
-			ack2Request.resourceId[i] = -1
+			ack2Request.ResourceId[i] = -1
 		}
 	}
 	content, err := MarshalRequest(ack2Request)
 	if err != nil {
 		logger.Fatal(err)
 	}			
-	logger.Debug("Node #", n.id, ", send ACK2 #", ack2Request.requestId, ":", content, " to Node #", dst, " with tokens", ack2Request.resourceId, ", routine #", getGID())	
+	// logger.Debug("Node #", n.id, ", send ACK2 #", ack2Request.RequestId, ":", content, " to Node #", dst, " with tokens", ack2Request.ResourceId, ", routine #", getGID())	
+	logger.Debug("Node #", n.id, ", send ACK2 #", ack2Request.RequestId, " to Node #", dst, " with tokens", ack2Request.ResourceId, ", routine #", getGID())	
 	n.messages[dst] <- content
 }
 
 func (n *Node) receiveACK1(request Request) {
 	logger.Debug("** Node #", n.id, "  receiveACK1 *******", ", routine #", getGID())
-	var requestTokens []int = request.resourceId
+	var requestTokens []int = request.ResourceId
 	for i := 0; i < len(requestTokens); i ++ {
 		var token Token
 		token.id = requestTokens[i]
@@ -794,13 +769,6 @@ func (n *Node) receiveACK1(request Request) {
 		n.addTokenToSet(token, BL_LOCKED)
 		
 		n.removeTokenFromCurrentlyRequestingTokens(requestTokens[i])
-		// for j := 0; j < len(n.currentlyRequestingTokens); j ++ {
-		// 	if requestTokens[i] == n.currentlyRequestingTokens[j] {
-		// 		n.currentlyRequestingTokens[j] = n.currentlyRequestingTokens[len(n.currentlyRequestingTokens) - 1]
-		// 		n.currentlyRequestingTokens = n.currentlyRequestingTokens[:len(n.currentlyRequestingTokens) - 1]				
-		// 		break
-		// 	}
-		// }
 	}
 	logger.Debug("Node #", n.id, " is still waiting for ", len(n.currentlyRequestingTokens), " tokens:", n.currentlyRequestingTokens)
 	n.enterCSIfCan(request)
@@ -817,7 +785,7 @@ func (n *Node) removeTokenFromCurrentlyRequestingTokens(token int)  {
 }
 func (n *Node) receiveACK2(request Request) bool {
 	logger.Debug("** Node #", n.id, "  receiveACK2 *******", ", routine #", getGID())
-	var requestTokens []int = request.resourceId
+	var requestTokens []int = request.ResourceId
 
 	for i := 0; i < len(requestTokens); i ++ {
 		var token Token
@@ -836,7 +804,7 @@ func (n *Node) receiveACK2(request Request) bool {
 func (n *Node) receiveCT() {
 	logger.Debug("** Node #", n.id, " Got TOKEN **", ", routine #", getGID())
 	logger.Debug("** Node #", n.id, ", CT=", ControlTokenInstance.String())
- 	logger.Debug("** Node #", n.id, " needs **", n.currentRequest.resourceId)
+ 	logger.Debug("** Node #", n.id, " needs **", n.currentRequest.ResourceId)
 	n.has_CT = true
  	logger.Debug("** Node #", n.id, " tokens before=", n.tokens)
 	var tokens []Token = make([]Token, len(ControlTokenInstance.B[n.id]) + len (n.tokens))
@@ -849,8 +817,8 @@ func (n *Node) receiveCT() {
 	n.tokens = tokens
  	logger.Debug("** Node #", n.id, " tokens after=", n.tokens)
 	
-	for i := 0; i < len(n.currentRequest.resourceId); i++ {
-		var token int = n.currentRequest.resourceId[i]
+	for i := 0; i < len(n.currentRequest.ResourceId); i++ {
+		var token int = n.currentRequest.ResourceId[i]
 		if !n.isTokenInSet(token) && !n.isTokenNeeded(token) {
 			n.tokensNeeded = append (n.tokensNeeded, token)
 		} else {
@@ -874,30 +842,31 @@ func (n *Node) rcv() {
 			if err != nil {
 				logger.Fatal(err)
 			}			
-			var requester = request.requesterNodeId
-			// if (request.messageType == REQ_TYPE) {
-			// 	var res = request.resourceId
-			// 	logger.Debug("Node #", n.id, "<-REQ#", request.requestId, ", Requester #", requester, ", nb of res:", len(res), " res ", res)
-			// 	go n.handleRequest(request)
-			// } else
-			if (request.messageType == REP_TYPE) {
-				logger.Info("Node #", n.id, ", received REPLY from Node #", requester, ",", msg)
-			} else if (request.messageType == REQ_CT_TYPE) {
-				logger.Info("Node #", n.id, ", received REQUEST Control Token from Node #", requester, ",", msg)
+			var requester = request.RequesterNodeId
+			if (request.MessageType == REP_TYPE) {
+				// logger.Info("Node #", n.id, ", received REPLY from Node #", requester, ",", msg)
+				logger.Info("Node #", n.id, ", received REPLY from Node #", requester)
+			} else if (request.MessageType == REQ_CT_TYPE) {
+				// logger.Info("Node #", n.id, ", received REQUEST Control Token from Node #", requester, ",", msg)
+				logger.Info("Node #", n.id, ", received REQUEST Control Token from Node #", requester)
 				n.mutex.Lock()
 				n.handleCTRequest(request)
 				n.mutex.Unlock()
-			} else if (request.messageType == REP_CT_TYPE) {
-				logger.Info("Node #", n.id, ", received REPLY Control Token from Node #", requester, ",", msg)
+			} else if (request.MessageType == REP_CT_TYPE) {
+				// logger.Info("Node #", n.id, ", received REPLY Control Token from Node #", requester, ",", msg)
+				logger.Info("Node #", n.id, ", received REPLY Control Token from Node #", requester)
 				go n.receiveCT()
-			} else if (request.messageType == INQUIRE_TYPE) {
-				logger.Info("Node #", n.id, ", received INQUIRE from Node #", requester, ",", msg)
+			} else if (request.MessageType == INQUIRE_TYPE) {
+				// logger.Info("Node #", n.id, ", received INQUIRE from Node #", requester, ",", msg)
+				logger.Info("Node #", n.id, ", received INQUIRE from Node #", requester)
 				go n.receiveInquire(request)
-			} else if (request.messageType == ACK1_TYPE) {
-				logger.Info("Node #", n.id, ", received ACK1 from Node #", requester, ",", msg)
+			} else if (request.MessageType == ACK1_TYPE) {
+				// logger.Info("Node #", n.id, ", received ACK1 from Node #", requester, ",", msg)
+				logger.Info("Node #", n.id, ", received ACK1 from Node #", requester)
 				go n.receiveACK1(request)
-			} else if (request.messageType == ACK2_TYPE) {
-				logger.Info("Node #", n.id, ", received ACK2 from Node #", requester, ",", msg)
+			} else if (request.MessageType == ACK2_TYPE) {
+				// logger.Info("Node #", n.id, ", received ACK2 from Node #", requester, ",", msg)
+				logger.Info("Node #", n.id, ", received ACK2 from Node #", requester)
 				go n.receiveACK2(request)
 			} else {
 				logger.Fatal("Fatal Error")
@@ -911,15 +880,16 @@ func (n *Node) rcv() {
 func (n *Node) requestCT() {
 	logger.Debug(n)
 	var request Request
-	request.requesterNodeId = n.id
-	request.requestId = 0
-	request.messageType = REQ_CT_TYPE
+	request.RequesterNodeId = n.id
+	request.RequestId = 0
+	request.MessageType = REQ_CT_TYPE
 	
 	content, err := MarshalRequest(request)
 	if err != nil {
 		logger.Fatal(err)
 	}			
-	logger.Debug("Node #", n.id, ",  REQUEST CT #", request.requestId, ":", content, " to Node #", n.last)
+	// logger.Debug("Node #", n.id, ",  REQUEST CT #", request.RequestId, ":", content, " to Node #", n.last)
+	logger.Debug("Node #", n.id, ",  REQUEST CT #", request.RequestId, " to Node #", n.last)
 	n.mutex.Lock()
 	n.requesting = true	
 	n.mutex.Unlock()
@@ -933,19 +903,19 @@ func (n *Node) requestCT() {
 
 func (n *Node) buildRequest() Request {
 	var request Request
-	request.messageType = REQ_TYPE
+	request.MessageType = REQ_TYPE
 	var resources = make([]int, NB_NODES)
 	for j := 0; j < NB_NODES; j++ {
 		resources[j] = j
 	}
-	request.requesterNodeId = n.id
-	request.requestId = n.requestIdCounter
-	n.requestIdCounter ++
-	request.resourceId = make([]int, REQUEST_SIZE)
+	request.RequesterNodeId = n.id
+	request.RequestId = n.RequestIdCounter
+	n.RequestIdCounter ++
+	request.ResourceId = make([]int, REQUEST_SIZE)
 	for k := 0; k < REQUEST_SIZE; k++ {
 		rand.Seed(time.Now().UnixNano())
 		var idx int = rand.Intn(len(resources))
-		request.resourceId[k] = resources[idx]
+		request.ResourceId[k] = resources[idx]
 		// remove element from array to avoid requesting it twice
 		// changes order, but who cares ?
 		resources[idx] = resources[len(resources) - 1]
@@ -963,9 +933,9 @@ func (n *Node) requestCS() {
 
 	var request Request = n.buildRequest()
 	
-	var requester = request.requesterNodeId
-	var res = request.resourceId
-	logger.Debug("Node #", n.id, "<-REQ#", request.requestId, ", Requester #", requester, ", nb of res:", len(res), " res ", res)
+	var requester = request.RequesterNodeId
+	var res = request.ResourceId
+	logger.Debug("Node #", n.id, "<-REQ#", request.RequestId, ", Requester #", requester, ", nb of res:", len(res), " res ", res)
 	n.handleRequest(request)
 	
 	logger.Debug("Node #", n.id," END requestCS", ", routine #", getGID())	
@@ -990,7 +960,7 @@ func (n *Node) BouabdallahLaforest(wg *sync.WaitGroup) {
 func main() {
 	var nodes = make([]Node, NB_NODES)
 	var wg sync.WaitGroup
-	var messages = make([]chan []byte, NB_NODES)
+	var messages = make([]chan bytes.Buffer, NB_NODES)
 
 	// logger.SetLevel(log.DebugLevel)
 	logger.SetLevel(log.InfoLevel)
@@ -1005,7 +975,7 @@ func main() {
 		nodes[i].requesting = false
 		nodes[i].next = -1
 		nodes[i].last = 0
-		nodes[i].requestIdCounter = i * 10
+		nodes[i].RequestIdCounter = i * 10
 		
 		// Initially the first node holds the Control Token
 		if nodes[i].last == nodes[i].id {
@@ -1015,9 +985,7 @@ func main() {
 			nodes[i].has_CT = false
 		}
 
-		// nodes[i].currentRequest = nil
-
-		messages[i] = make(chan []byte)
+		messages[i] = make(chan bytes.Buffer)
 		
 		nodes[i].waitingSet = make(map[int][]int)
 
@@ -1050,5 +1018,4 @@ func main() {
 	for i := 0; i < NB_NODES; i++ {
 		logger.Info("Node #", nodes[i].id," entered CS ", nodes[i].nbCS, " time")	
 	}
-	//	br.Flush()
 }
