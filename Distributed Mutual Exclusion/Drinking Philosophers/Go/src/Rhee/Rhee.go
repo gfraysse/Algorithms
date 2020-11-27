@@ -3,6 +3,7 @@
 
 TODO: 
 - finalize implementation: 
+    - ends up on Fatal "receiveRelease but not rm_critical"
     - a queue of pending messages seems to be necessary, 
 - code duplication: WaitForReplies, RequestCMCS, enterCMCSIfICan between this and ChandyMisra.go files, find best workaround for Go lack of OO overrinding of methods
 
