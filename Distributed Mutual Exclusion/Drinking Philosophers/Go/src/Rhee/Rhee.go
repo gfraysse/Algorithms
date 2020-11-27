@@ -2,7 +2,9 @@
   Copyright "Guillaume Fraysse <gfraysse dot spam plus code at gmail dot com>"
 
 TODO: 
-- finalize implementation
+- finalize implementation: 
+    - a queue of pending messages seems to be necessary, 
+    - the numbering of requests is limited by the marshal/unmarshal methods
 - code duplication: WaitForReplies, RequestCMCS, enterCMCSIfICan between this and ChandyMisra.go files, find best workaround for Go lack of OO overrinding of methods
 
 How-to run: 
@@ -28,6 +30,7 @@ package Rhee
 */
 import (
 	"bytes" // for go routine ID getGID
+	"encoding/gob"
 	"fmt"
 	"ChandyMisra"
 	log "github.com/sirupsen/logrus"
@@ -70,42 +73,47 @@ var EMPTY int = -1
 var Logger = log.New()
 
 // Debug function
-/*
 func displayNodes() {
 	for i := 0; i < NB_NODES; i++ {
-		for j := 0; j < NB_NODES - 1; j++ {
-			Logger.Info("  P#", Nodes[i].id, ", fork #", Nodes[i].forkId[j], ", status=", Nodes[i].forkStatus[j], ", clean=", Nodes[i].forkClean[j])
+		Logger.Debug("  N#", Nodes[i].Philosopher.Id, ", inCMCS #", Nodes[i].InCMCS, ", inRheeCS=", Nodes[i].InRheeCS)
+		for key, element := range Nodes[i].PositionSelected {
+			Logger.Debug("Request:", key, "=>", "Position:", element)
+		}
+
+		for j, element := range Nodes[i].Occupant {
+			Logger.Debug("occupant[", j, "] =", "request #", element)
 		}
 	}
 }
-*/
+
 
 type Request struct {
-	requesterNodeId int
-	requestId      int
-	messageType    int
-	resourceId     []int
-	occupied       []int
-	position       int
+	RequesterNodeId int
+	RequestId      int
+	MessageType    int
+	ResourceId     []int
+	Occupied       []int
+	Position       int
 }
 
 type Node struct {
 	Philosopher          ChandyMisra.Philosopher
-	inCMCS               bool
-	inRheeCS             bool
+	InCMCS               bool
+	InRheeCS             bool
 	// From paper: variables for resource managers
-	has_received_advance [] bool
-	rm_critical          bool
+	Has_received_advance [] bool
+	Rm_critical          bool
 	// From paper: variables for users
-	has_dec_sent         [] bool
-	req_report           bool
-	occupant             [] int
+	Has_dec_sent         [] bool
+	Req_report           bool
+	Occupant             map[int] int
 	// variables for implementation
-	Messages             []chan []byte
+	Messages             []chan bytes.Buffer
 	nbRheeCS             int
-	requestIdCounter     int
+	RequestIdCounter     int
 	nbMarkedRcv          int
-	positionSelected     map[int]int
+	nbGrantRcv           int
+	PositionSelected     map[int]int
 }
 
 ////////////////////////////////////////////////////////////
@@ -124,54 +132,20 @@ func getGID() uint64 {
 ////////////////////////////////////////////////////////////
 // Utility functions
 ////////////////////////////////////////////////////////////
-func UnmarshalRequest(text []byte, request *Request) error {
-	request.requesterNodeId = int(text[0])
-	request.requestId       = int(text[1])
-	request.messageType     = int(text[2])
-	request.position        = int(text[3])
-	var lenOccupied = int(text[4 + REQUEST_SIZE])
+func UnmarshalRequest(b bytes.Buffer, request *Request) error {
+	dec := gob.NewDecoder(&b)
 
-	request.resourceId = make ([]int, REQUEST_SIZE)
-	request.occupied = make ([]int, lenOccupied)
-	
-	for i := 0; i < REQUEST_SIZE; i++ {
-		var val int = int(text[4 + i])
-		if val == 255 {
-			val = -1
-		}
-		request.resourceId[i] = val
-	}
+	error := dec.Decode(request)
 
-	if lenOccupied > 0 {
-		for i := 0; i < lenOccupied; i++ {
-			var val int = int(text[4 + REQUEST_SIZE + 1 + i])
-			if val == 255 {
-				val = -1
-			}
-			request.occupied[i] = val
-		}
-	}
-	return nil
+	return error
 }
 
-func MarshalRequest(request Request) ([]byte, error) {
-	var ret = make ([]byte, 4 + REQUEST_SIZE + 1 + len(request.occupied))
+func MarshalRequest(request Request) (bytes.Buffer, error) {
+	var buffer bytes.Buffer        
+	enc := gob.NewEncoder(&buffer) 
+	error := enc.Encode(request)
 
-	ret[0] = byte(request.requesterNodeId)
-	ret[1] = byte(request.requestId)
-	ret[2] = byte(request.messageType)
-	ret[3] = byte(request.position)
-
-	for i := 0; i < REQUEST_SIZE; i++ {
-		ret[4 + i] = byte(request.resourceId[i])
-	}
-
-	ret[4 + REQUEST_SIZE] = byte(len(request.occupied))
-	for i := 0; i < len(request.occupied); i++ {
-		ret[4 + REQUEST_SIZE + 1 + i] = byte(request.occupied[i])
-	}
-
-	return ret, nil
+	return buffer, error
 }
 
 func (r *Request) String() string {
@@ -179,19 +153,19 @@ func (r *Request) String() string {
 	var res string = ""
 	var occ string = ""
 
-	for i := 0; i < len(r.resourceId); i ++ {
-		res +=  strconv.Itoa(r.resourceId[i]) + ", "
+	for i := 0; i < len(r.ResourceId); i ++ {
+		res +=  strconv.Itoa(r.ResourceId[i]) + ", "
 	}
 
-	for i := 0; i < len(r.occupied); i ++ {
-		occ +=  strconv.Itoa(r.occupied[i]) + ", "
+	for i := 0; i < len(r.Occupied); i ++ {
+		occ +=  strconv.Itoa(r.Occupied[i]) + ", "
 	}
 
 	val = fmt.Sprintf("Request #%d, requester node=%d, position=%d messageType=%d, resources={%s}, occupied={%s}",
-		r.requestId,
-		r.requesterNodeId,
-		r.position,
-		r.messageType,
+		r.RequestId,
+		r.RequesterNodeId,
+		r.Position,
+		r.MessageType,
 		res,
 		occ)
 	return val
@@ -202,7 +176,7 @@ func (r *Request) String() string {
 ////////////////////////////////////////////////////////////
 func (n *Node) String() string {
 	var val string
-	val = fmt.Sprintf("Node #%d, state=%d, first fork=%d/%v/%v, second fork=%d/%v/%v, third fork=%d/%v/%v, my fork=%d/%v\n",
+	val = fmt.Sprintf("Node #%d, state=%d",
 		n.Philosopher.Id,
 		n.Philosopher.State)
 	return val
@@ -210,27 +184,30 @@ func (n *Node) String() string {
 
 func (n *Node) EnterCMCS(request Request) {
 	Logger.Info("Node #", n.Philosopher.Id, " ######################### Node.EnterCMCS, req=", request.String())
-	n.inCMCS = true
+	n.InCMCS = true
 	n.Philosopher.EnterCS()
+	displayNodes()
 }
 
 func (n *Node) ExecuteCMCSCode(request Request) {
 	Logger.Debug("Node #", n.Philosopher.Id, " ######################### Node.executeCMCSCode")
 
-	if n.req_report == false {
-		n.req_report = true
-		n.positionSelected[request.requestId] = 0
+	if n.Req_report == false {
+		n.Req_report = true
+		n.PositionSelected[request.RequestId] = 0
 		n.nbMarkedRcv = 0
-		for k := 0; k < len(request.resourceId); k++ {
-			go n.sendReport(request.resourceId[k], request)
+		n.nbGrantRcv = 0
+		for k := 0; k < len(request.ResourceId); k++ {
+			go n.sendReport(request.ResourceId[k], request)
 		}
 	}	
 }
 
 func (n *Node) ReleaseCMCS(request Request) {
 	Logger.Info("Node #", n.Philosopher.Id," Node.releaseCMCS #########################, req=", request.String())
-	n.inCMCS = false
+	n.InCMCS = false
 	n.Philosopher.ReleaseCS()
+	displayNodes()
 	
 	for i := 0; i < len(n.Philosopher.Queue); i++ {
 		var r ChandyMisra.ForkRequest
@@ -254,19 +231,21 @@ func (n *Node) ReleaseCMCS(request Request) {
 
 func (n *Node) EnterCS(request Request) {
 	Logger.Info("Node #", n.Philosopher.Id, " ######################### Node.EnterCS")
+	displayNodes()
 	n.nbRheeCS ++
 }
 
 func (n *Node) ExecuteCSCode(request Request) {
 	Logger.Debug("Node #", n.Philosopher.Id, " ######################### Node.ExecuteCSCode")
-	Logger.Debug(n)
+	// Logger.Debug(n)
 	time.Sleep(500 * time.Millisecond)
 }
 
 func (n *Node) ReleaseCS(request Request) {
 	Logger.Info("Node #", n.Philosopher.Id," Node.ReleaseCS #########################")
-	for i := 0; i < len(request.resourceId); i++ {
-		n.sendRelease(request.resourceId[i], request)
+	displayNodes()
+	for i := 0; i < len(request.ResourceId); i++ {
+		n.sendRelease(request.ResourceId[i], request)
 	}
 }
 
@@ -275,25 +254,25 @@ func (n *Node) sendRequest(request Request, destination int) {
         if err != nil {
                 log.Fatal("sendRequest", err)
         }                       
-        log.Print("Node #", n.Philosopher.Id, ",  REQUEST #", request.requestId, ":", content, " for resources #", request.resourceId[0], ", #", request.resourceId[1], " to Node #", destination)       
+        log.Print("Node #", n.Philosopher.Id, ",  REQUEST #", request.RequestId, ":", content, " for resources #", request.ResourceId[0], ", #", request.ResourceId[1], " to Node #", destination)       
         n.Messages[destination] <- content
 }
 
 func (n *Node) buildRequest() Request {
 	var request Request
-	request.messageType = REQ_TYPE
+	request.MessageType = REQ_TYPE
 	var resources = make([]int, NB_NODES)
 	for j := 0; j < NB_NODES; j++ {
 		resources[j] = j
 	}
-	request.requesterNodeId = n.Philosopher.Id
-	request.requestId = n.requestIdCounter
-	n.requestIdCounter ++
-	request.resourceId = make([]int, REQUEST_SIZE)
+	request.RequesterNodeId = n.Philosopher.Id
+	request.RequestId = n.RequestIdCounter
+	n.RequestIdCounter ++
+	request.ResourceId = make([]int, REQUEST_SIZE)
 	for k := 0; k < REQUEST_SIZE; k++ {
 		rand.Seed(time.Now().UnixNano())
 		var idx int = rand.Intn(len(resources))
-		request.resourceId[k] = resources[idx]
+		request.ResourceId[k] = resources[idx]
 		// remove element from array to avoid requesting it twice
 		// changes order, but who cares ?
 		resources[idx] = resources[len(resources) - 1]
@@ -305,17 +284,28 @@ func (n *Node) buildRequest() Request {
 
 func (n *Node) advance_one_position(p int, request Request) {
 	Logger.Debug("Node #", n.Philosopher.Id,"** Node.advance_one_position **");
-	n.occupant[p - 1] = n.occupant[p]
-	n.occupant[p] = EMPTY
-	n.has_received_advance[p] = false
-	n.has_dec_sent[p] = false
+	n.Occupant[p - 1] = n.Occupant[p]
+	n.Occupant[p] = EMPTY
+	n.Has_received_advance[p] = false
+	n.Has_dec_sent[p] = false
 	if p - 1 == 1 {
-		go n.sendGrant(n.occupant[p - 1], request)
+		go n.sendGrant(n.Occupant[p - 1], request)
 	}
-	if n.has_dec_sent[p - 1] == false && n.occupant[p - 2] == EMPTY {
-		n.has_dec_sent[p] = true
-		go n.sendDec(p - 1, n.occupant[p - 1], request)
+	if n.Has_dec_sent[p - 1] == false && n.Occupant[p - 2] == EMPTY {
+		n.Has_dec_sent[p] = true
+		go n.sendDec(p - 1, n.Occupant[p - 1], request)
 	}
+}
+
+func (n *Node) hasOccupantsAfterPosition(p int) bool {
+	for o, r := range n.Occupant {
+		if o >= p && r != EMPTY {
+			Logger.Debug("Found occupant ", r, " after position ", p);
+			return true
+		}
+	}
+	Logger.Debug("Found no occupant after position ", p);
+	return false
 }
 
 func (n *Node) adjust_queue(p int, request Request) {
@@ -323,13 +313,19 @@ func (n *Node) adjust_queue(p int, request Request) {
 	if p == 0 {
 		return
 	}
-	
-	for n.occupant[p] != EMPTY && n.occupant[p - 1] == EMPTY {
-		if n.has_dec_sent[p] == false {
-			n.has_dec_sent[p] = true
-			go n.sendDec(p, n.occupant[p], request)
+
+	for n.hasOccupantsAfterPosition(p) && n.Occupant[p - 1] == EMPTY {
+		if n.Occupant[p] == EMPTY {
+			p++
+			continue
+		}				
+		
+		//	for n.Occupant[p] != EMPTY && n.Occupant[p - 1] == EMPTY {
+		if n.Has_dec_sent[p] == false || n.Occupant[p] != EMPTY{
+			n.Has_dec_sent[p] = true
+			go n.sendDec(p, n.Occupant[p], request)
 		}
-		if n.has_received_advance[p] == true {
+		if n.Has_received_advance[p] == true {
 			n.advance_one_position(p, request)			
 		}
 		p ++
@@ -337,130 +333,137 @@ func (n *Node) adjust_queue(p int, request Request) {
 }
 
 func (n *Node) sendReport(dst int, request Request) {
-	request.messageType = REPORT_TYPE
-	request.requesterNodeId = n.Philosopher.Id
+	request.MessageType = REPORT_TYPE
+	request.RequesterNodeId = n.Philosopher.Id
 
 	content, err := MarshalRequest(request)
 	if err != nil {
 		Logger.Fatal("sendReport", err)
 	}			
-	Logger.Debug("Node #", n.Philosopher.Id, ", send REPORT #", request.requestId, ":", content, " to Node #", dst, ", routine #", getGID())
+	// Logger.Debug("Node #", n.Philosopher.Id, ", send REPORT #", request.RequestId, ":", content, " to Node #", dst, ", routine #", getGID())
+	Logger.Debug("Node #", n.Philosopher.Id, ", send REPORT #", request.RequestId, " to Node #", dst, ", routine #", getGID())
 	n.Messages[dst] <- content
 }
 
 func (n *Node) sendSelect(position int, dst int, request Request) {
-	request.messageType = SELECT_TYPE
-	request.requesterNodeId = n.Philosopher.Id
-	request.position = position
+	request.MessageType = SELECT_TYPE
+	request.RequesterNodeId = n.Philosopher.Id
+	request.Position = position
 
 	content, err := MarshalRequest(request)
 	if err != nil {
 		Logger.Fatal("sendSelect", err)
 	}			
-	Logger.Debug("Node #", n.Philosopher.Id, ", send SELECT #", request.requestId, " with position=", position, ":", content, " to Node #", dst, ", routine #", getGID())
+	// Logger.Debug("Node #", n.Philosopher.Id, ", send SELECT #", request.RequestId, " with position=", position, ":", content, " to Node #", dst, ", routine #", getGID())
+	Logger.Debug("Node #", n.Philosopher.Id, ", send SELECT #", request.RequestId, " with position=", position, " to Node #", dst, ", routine #", getGID())
 	n.Messages[dst] <- content
 }
 
 func (n *Node) sendRelease(dst int, request Request) {
-	request.messageType = RELEASE_TYPE
-	request.requesterNodeId = n.Philosopher.Id
+	request.MessageType = RELEASE_TYPE
+	request.RequesterNodeId = n.Philosopher.Id
 
 	content, err := MarshalRequest(request)
 	if err != nil {
 		Logger.Fatal("sendRelease", err)
 	}			
-	Logger.Debug("Node #", n.Philosopher.Id, ", send RELEASE #", request.requestId, ":", content, " to Node #", dst, ", routine #", getGID())
+	// Logger.Debug("Node #", n.Philosopher.Id, ", send RELEASE #", request.RequestId, ":", content, " to Node #", dst, ", routine #", getGID())
+	Logger.Debug("Node #", n.Philosopher.Id, ", send RELEASE #", request.RequestId, " to Node #", dst, ", routine #", getGID())
 	n.Messages[dst] <- content
 }
 
 func (n *Node) sendMarked(occupied []int, dst int, request Request) {
-	request.messageType = MARKED_TYPE
-	request.requesterNodeId = n.Philosopher.Id
-	request.occupied = occupied
+	request.MessageType = MARKED_TYPE
+	request.RequesterNodeId = n.Philosopher.Id
+	request.Occupied = occupied
 
 	content, err := MarshalRequest(request)
 	if err != nil {
 		Logger.Fatal("sendMarked", err)
 	}			
-	Logger.Debug("Node #", n.Philosopher.Id, ", send MARKED #", request.requestId, ":", content, " to Node #", dst, " with occupied", occupied, ", routine #", getGID())	
+	// Logger.Debug("Node #", n.Philosopher.Id, ", send MARKED #", request.RequestId, ":", content, " to Node #", dst, " with occupied", occupied, ", routine #", getGID())	
+	Logger.Debug("Node #", n.Philosopher.Id, ", send MARKED #", request.RequestId, " to Node #", dst, " with occupied", occupied, ", routine #", getGID())	
 	n.Messages[dst] <- content
 }
 
 func (n *Node) sendGrant(dst int, request Request) {
-	request.messageType = GRANT_TYPE
-	request.requesterNodeId = n.Philosopher.Id
+	request.MessageType = GRANT_TYPE
+	request.RequesterNodeId = n.Philosopher.Id
 
 	content, err := MarshalRequest(request)
 	if err != nil {
 		Logger.Fatal("sendGrant", err)
 	}			
-	Logger.Debug("Node #", n.Philosopher.Id, ", send GRANT #", request.requestId, ":", content, " to Node #", dst, ", routine #", getGID())
+	// Logger.Debug("Node #", n.Philosopher.Id, ", send GRANT #", request.RequestId, ":", content, " to Node #", dst, ", routine #", getGID())
+	Logger.Debug("Node #", n.Philosopher.Id, ", send GRANT #", request.RequestId, " to Node #", dst, ", routine #", getGID())
 	n.Messages[dst] <- content
 }
 
 func (n *Node) sendAdv(position int, dst int, request Request) {
-	request.messageType = ADV_TYPE
-	request.requesterNodeId = n.Philosopher.Id
-	request.position = position
+	request.MessageType = ADV_TYPE
+	request.RequesterNodeId = n.Philosopher.Id
+	request.Position = position
 
 	content, err := MarshalRequest(request)
 	if err != nil {
 		Logger.Fatal("sendAdv", err)
 	}			
-	Logger.Debug("Node #", n.Philosopher.Id, ", send ADV #", request.requestId, " with position=", position, ":", content, " to Node #", dst, ", routine #", getGID())
+	// Logger.Debug("Node #", n.Philosopher.Id, ", send ADV #", request.RequestId, " with position=", position, ":", content, " to Node #", dst, ", routine #", getGID())
+	Logger.Debug("Node #", n.Philosopher.Id, ", send ADV #", request.RequestId, " with position=", position, " to Node #", dst, ", routine #", getGID())
 	n.Messages[dst] <- content
 }
 
 func (n *Node) sendDec(p int, dst int, request Request) {
-	request.messageType = DEC_TYPE
-	request.requesterNodeId = n.Philosopher.Id
+	request.MessageType = DEC_TYPE
+	request.RequesterNodeId = n.Philosopher.Id
 
 	content, err := MarshalRequest(request)
 	if err != nil {
 		Logger.Fatal("sendDec", err)
 	}			
-	Logger.Debug("Node #", n.Philosopher.Id, ", send DEC #", request.requestId, ":", content, " to Node #", dst, ", routine #", getGID())
+	// Logger.Debug("Node #", n.Philosopher.Id, ", send DEC #", request.RequestId, ":", content, " to Node #", dst, ", routine #", getGID())
+	Logger.Debug("Node #", n.Philosopher.Id, ", send DEC #", request.RequestId, " to Node #", dst, ", routine #", getGID())
 	n.Messages[dst] <- content
 }
 
 func (n *Node) receiveReport(request Request) {
 	var occupied []int
 	Logger.Debug("Node #", n.Philosopher.Id,"** Node.receiveReport **, req=", request.String());
-	if n.rm_critical == true {
+	if n.Rm_critical == true {
 		Logger.Fatal("Node #", n.Philosopher.Id, " already rm_critical !")
 	}
 	
-	if n.rm_critical == false {		
-		n.rm_critical = true
-		for i := 0; i < len(n.occupant); i ++ {
-			if n.occupant[i] != EMPTY {
+	if n.Rm_critical == false {		
+		n.Rm_critical = true
+		for i := 0; i < len(n.Occupant); i ++ {
+			if n.Occupant[i] != EMPTY {
 				if i > 0 {
 					occupied = append(occupied, i - 1)
 				}
 				occupied = append(occupied, i)
 			}
 		}
-		go n.sendMarked(occupied, request.requesterNodeId, request)
+		go n.sendMarked(occupied, request.RequesterNodeId, request)
 	} else {
-		Logger.Info("Node #", n.Philosopher.Id, " receiveReport n.rm_critical = true")
+		Logger.Info("Node #", n.Philosopher.Id, " receiveReport n.Rm_critical = true")
 	}
 }
 
 func (n *Node) receiveSelect(request Request) {
 	Logger.Debug("Node #", n.Philosopher.Id,"** Node.receiveSelect **, req=", request.String());
-	n.rm_critical = false
-	// Logger.Debug("len(n.occupant)=", len(n.occupant))
-	n.occupant[request.position] = request.requestId
-	if request.position == 0 {
-		n.sendGrant(request.requesterNodeId, request)		
+	n.Rm_critical = false
+	// Logger.Debug("len(n.Occupant)=", len(n.Occupant))
+	n.Occupant[request.Position] = request.RequestId
+	if request.Position == 0 {
+		n.sendGrant(request.RequesterNodeId, request)		
 	}
-	n.adjust_queue(request.position, request)
+	n.adjust_queue(request.Position, request)
 }
 
 func (n *Node) receiveRelease(request Request) {
 	Logger.Debug("Node #", n.Philosopher.Id, "** Node.receiveRelease **");
-	if n.rm_critical == true {
-		n.occupant[0] = EMPTY
+	if n.Rm_critical == true {
+		n.Occupant[0] = EMPTY
 		n.adjust_queue(1, request)
 	} else {
 		Logger.Fatal("receiveRelease but not rm_critical")
@@ -470,44 +473,50 @@ func (n *Node) receiveRelease(request Request) {
 func (n *Node) receiveMarked(request Request) {
 	var position_selected int = 0;
 	n.nbMarkedRcv ++
-	if len(request.occupied) > 0 {
+	if len(request.Occupied) > 0 {
 		var maxPosition int = 0;
-		for i := 0; i < len(request.occupied); i ++ {
-			if request.occupied[i] > maxPosition {
+		for i := 0; i < len(request.Occupied); i ++ {
+			if request.Occupied[i] > maxPosition {
 				maxPosition = i
 			}		
 		}
 		position_selected = maxPosition + 1
 	}
-	if position_selected > n.positionSelected[request.requestId] {
-		n.positionSelected[request.requestId] = position_selected
+	if position_selected > n.PositionSelected[request.RequestId] {
+		n.PositionSelected[request.RequestId] = position_selected
 	}
-	if n.nbMarkedRcv == len(request.resourceId) {
+	if n.nbMarkedRcv == len(request.ResourceId) {
 		Logger.Debug("Node #", n.Philosopher.Id, " ALL MARKED RECEIVED")
-		for k := 0; k < len(request.resourceId); k++ {
-			go n.sendSelect(n.positionSelected[request.requestId], request.resourceId[k], request)
+		for k := 0; k < len(request.ResourceId); k++ {
+			go n.sendSelect(n.PositionSelected[request.RequestId], request.ResourceId[k], request)
 		}
-		n.req_report = false
+		n.Req_report = false
 		n.ReleaseCMCS(request)
 	} else {
-		Logger.Debug("Node #", n.Philosopher.Id, " is still expecting ", len(request.resourceId) - n.nbMarkedRcv, " MARKED")
+		Logger.Debug("Node #", n.Philosopher.Id, " is still expecting ", len(request.ResourceId) - n.nbMarkedRcv, " MARKED")
 	}
 }
 
 func (n *Node) receiveGrant(request Request) {
 	Logger.Debug("Node #", n.Philosopher.Id,"** Node.receiveGrant **");
-	n.inRheeCS = true
-	n.EnterCS(request)
-	n.ExecuteCSCode(request)
-	n.ReleaseCS(request)
-	go n.requestCS()
+	n.nbGrantRcv ++
+	if n.nbGrantRcv == len(request.ResourceId) {
+		Logger.Debug("Node #", n.Philosopher.Id, " ALL GRANT RECEIVED")
+		n.InRheeCS = true
+		n.EnterCS(request)
+		n.ExecuteCSCode(request)
+		n.ReleaseCS(request)
+		go n.requestCS()
+	} else {
+		Logger.Debug("Node #", n.Philosopher.Id, " is still expecting ", len(request.ResourceId) - n.nbGrantRcv, " GRANT")
+	}
 }
 
 func (n *Node) receiveAdv(request Request) {
 	Logger.Debug("Node #", n.Philosopher.Id,"** Node.receiveAdv **");
-	if n.rm_critical == true {
-		n.has_received_advance[request.position] = true
-		n.adjust_queue(request.position, request)
+	if n.Rm_critical == true {
+		n.Has_received_advance[request.Position] = true
+		n.adjust_queue(request.Position, request)
 	} else {
 		Logger.Fatal("receiveAdv but not rm_critical")
 	}
@@ -515,8 +524,8 @@ func (n *Node) receiveAdv(request Request) {
 
 func (n *Node) receiveDec(request Request) {
 	Logger.Debug("Node #", n.Philosopher.Id,"** Node.receiveDec **");
-	for k := 0; k < len(request.resourceId); k++ {
-		go n.sendAdv(request.position, request.resourceId[k], request)
+	for k := 0; k < len(request.ResourceId); k++ {
+		go n.sendAdv(request.Position, request.ResourceId[k], request)
 	}
 }
 
@@ -571,37 +580,46 @@ func (n *Node) rcv() {
 				Logger.Fatal("rcv", err)
 			}			
 			Logger.Debug(request.String())
-			var requester = request.requesterNodeId
-			if (request.messageType == REQ_TYPE) {
-				var res = request.resourceId
-				Logger.Debug("Node #", n.Philosopher.Id, "<-REQ#", request.requestId, ", Requester #", requester, ", nb of res:", len(res), " res ", res)
+			var requester = request.RequesterNodeId
+			if (request.MessageType == REQ_TYPE) {
+				var res = request.ResourceId
+				Logger.Debug("Node #", n.Philosopher.Id, "<-REQ#", request.RequestId, ", Requester #", requester, ", nb of res:", len(res), " res ", res)
 				go n.handleRequest(request)
 			} else
-			if (request.messageType == REP_TYPE) {
-				Logger.Info("Node #", n.Philosopher.Id, ", received REPLY from Node #", requester, ",", msg)
-			} else if (request.messageType == REPORT_TYPE) {
-				Logger.Info("Node #", n.Philosopher.Id, ", received REPORT from Node #", requester, ",", msg)
+			if (request.MessageType == REP_TYPE) {
+				// Logger.Info("Node #", n.Philosopher.Id, ", received REPLY from Node #", requester, ",", msg)
+				Logger.Info("Node #", n.Philosopher.Id, ", received REPLY from Node #", requester)
+			} else if (request.MessageType == REPORT_TYPE) {
+				// Logger.Info("Node #", n.Philosopher.Id, ", received REPORT from Node #", requester, ",", msg)
+				Logger.Info("Node #", n.Philosopher.Id, ", received REPORT from Node #", requester)
 				go n.receiveReport(request)
-			} else if (request.messageType == SELECT_TYPE) {
-				Logger.Info("Node #", n.Philosopher.Id, ", received SELECT from Node #", requester, ",", msg)
+			} else if (request.MessageType == SELECT_TYPE) {
+				// Logger.Info("Node #", n.Philosopher.Id, ", received SELECT from Node #", requester, ",", msg)
+				Logger.Info("Node #", n.Philosopher.Id, ", received SELECT from Node #", requester)
 				go n.receiveSelect(request)
-			} else if (request.messageType == RELEASE_TYPE) {
-				Logger.Info("Node #", n.Philosopher.Id, ", received RELEASE from Node #", requester, ",", msg)
+			} else if (request.MessageType == RELEASE_TYPE) {
+				// Logger.Info("Node #", n.Philosopher.Id, ", received RELEASE from Node #", requester, ",", msg)
+				Logger.Info("Node #", n.Philosopher.Id, ", received RELEASE from Node #", requester)
 				go n.receiveRelease(request)
-			} else if (request.messageType == MARKED_TYPE) {
-				Logger.Info("Node #", n.Philosopher.Id, ", received MARKED from Node #", requester, ",", msg)
+			} else if (request.MessageType == MARKED_TYPE) {
+				// Logger.Info("Node #", n.Philosopher.Id, ", received MARKED from Node #", requester, ",", msg)
+				Logger.Info("Node #", n.Philosopher.Id, ", received MARKED from Node #", requester)
 				go n.receiveMarked(request)
-			} else if (request.messageType == GRANT_TYPE) {
-				Logger.Info("Node #", n.Philosopher.Id, ", received GRANT from Node #", requester, ",", msg)
+			} else if (request.MessageType == GRANT_TYPE) {
+				// Logger.Info("Node #", n.Philosopher.Id, ", received GRANT from Node #", requester, ",", msg)
+				Logger.Info("Node #", n.Philosopher.Id, ", received GRANT from Node #", requester)
 				go n.receiveGrant(request)
-			} else if (request.messageType == ADV_TYPE) {
-				Logger.Info("Node #", n.Philosopher.Id, ", received ADV from Node #", requester, ",", msg)
+			} else if (request.MessageType == ADV_TYPE) {
+				// Logger.Info("Node #", n.Philosopher.Id, ", received ADV from Node #", requester, ",", msg)
+				Logger.Info("Node #", n.Philosopher.Id, ", received ADV from Node #", requester)
 				go n.receiveAdv(request)
-			} else if (request.messageType == DEC_TYPE) {
-				Logger.Info("Node #", n.Philosopher.Id, ", received DEC from Node #", requester, ",", msg)
+			} else if (request.MessageType == DEC_TYPE) {
+				// Logger.Info("Node #", n.Philosopher.Id, ", received DEC from Node #", requester, ",", msg)
+				Logger.Info("Node #", n.Philosopher.Id, ", received DEC from Node #", requester)
 				go n.receiveDec(request)
-			} else if (request.messageType == REQUEST_FORK) {
-				Logger.Info("Node #", n.Philosopher.Id, ", received REQUEST_FORK from Node #", requester, ",", msg)
+			} else if (request.MessageType == REQUEST_FORK) {
+				// Logger.Info("Node #", n.Philosopher.Id, ", received REQUEST_FORK from Node #", requester, ",", msg)
+				Logger.Info("Node #", n.Philosopher.Id, ", received REQUEST_FORK from Node #", requester)
 				for i := 0; i < NB_NODES - 1; i ++ {
 					if requester == n.Philosopher.ForkId[i] {
 						if n.Philosopher.ForkStatus[i] == true {
@@ -624,8 +642,9 @@ func (n *Node) rcv() {
 					}
 				}
 				n.enterCMCSIfICan(request)
-			} else if (request.messageType == SEND_FORK) {
-				Logger.Info("Node #", n.Philosopher.Id, ", received SEND_FORK from Node #", requester, ",", msg)
+			} else if (request.MessageType == SEND_FORK) {
+				// Logger.Info("Node #", n.Philosopher.Id, ", received SEND_FORK from Node #", requester, ",", msg)
+				Logger.Info("Node #", n.Philosopher.Id, ", received SEND_FORK from Node #", requester)
 				log.Print(requester, ": ", n.Philosopher.Id, " <==== ", requester)	
 				for i := 0; i < NB_NODES - 1; i ++ {
 					if (requester == n.Philosopher.ForkId[i]) {
@@ -636,7 +655,7 @@ func (n *Node) rcv() {
 				}
 				n.enterCMCSIfICan(request)
 			} else {
-				Logger.Fatal("Unknown message type=", request.messageType)
+				Logger.Fatal("Unknown message type=", request.MessageType)
 			}
 		}
 	}
@@ -695,28 +714,28 @@ func (n *Node) RequestCMCS(request Request) {
 }
 
 func (n *Node) RequestFork(dst int, request Request) {
-	request.messageType = REQUEST_FORK
-	request.requesterNodeId = n.Philosopher.Id
+	request.MessageType = REQUEST_FORK
+	request.RequesterNodeId = n.Philosopher.Id
 
 	content, err := MarshalRequest(request)
 	if err != nil {
 		Logger.Fatal("RequestFort", err)
 	}			
-	// Logger.Debug("Node #", n.Philosopher.Id, ", send REQUEST_FORK #", request.requestId, ":", content, " to Node #", dst, ", routine #", getGID())	
+	// Logger.Debug("Node #", n.Philosopher.Id, ", send REQUEST_FORK #", request.RequestId, ":", content, " to Node #", dst, ", routine #", getGID())	
 	Logger.Info(n.Philosopher.Id, " --", dst, "--> ", dst)	
 	n.Messages[dst] <- content
 	NB_MSG ++
 }
 
 func (n *Node) SendFork(dst int, request Request) {
-	request.messageType = SEND_FORK
-	request.requesterNodeId = n.Philosopher.Id
+	request.MessageType = SEND_FORK
+	request.RequesterNodeId = n.Philosopher.Id
 
 	content, err := MarshalRequest(request)
 	if err != nil {
 		Logger.Fatal("SendFork", err)
 	}			
-	// Logger.Debug("Node #", n.Philosopher.Id, ", send SEND_FORK #", request.requestId, ":", content, " to Node #", dst, ", routine #", getGID())	
+	// Logger.Debug("Node #", n.Philosopher.Id, ", send SEND_FORK #", request.RequestId, ":", content, " to Node #", dst, ", routine #", getGID())	
 	Logger.Info(n.Philosopher.Id,": ", n.Philosopher.Id, " ====> ", dst)	
 	n.Messages[dst] <- content
 	NB_MSG ++
@@ -730,9 +749,9 @@ func (n *Node) requestCS() {
 
 	var request Request = n.buildRequest()
 	
-	var requester = request.requesterNodeId
-	var res = request.resourceId
-	Logger.Debug("Node #", n.Philosopher.Id, "<-REQ#", request.requestId, ", Requester #", requester, ", nb of res:", len(res), " res ", res)
+	var requester = request.RequesterNodeId
+	var res = request.ResourceId
+	Logger.Debug("Node #", n.Philosopher.Id, "<-REQ#", request.RequestId, ", Requester #", requester, ", nb of res:", len(res), " res ", res)
 	n.handleRequest(request)
 
 	Logger.Info("Node #", n.Philosopher.Id," END requestCS")	
@@ -760,10 +779,11 @@ func Init() {
 	Logger.Print("Rhee.Init")	
 	ChandyMisra.Init()
 
+	gob.Register(Node{})
+	
 	Nodes = make([]Node, NB_NODES)
-	var messages = make([]chan []byte, NB_NODES)
+	var messages = make([]chan bytes.Buffer, NB_NODES)
 	var philosopherMessages = make([]chan string, NB_NODES)
-	var occupants = make([]int, NB_NODES *2 )
 	var has_received_advance = make([]bool, NB_NODES)
 	var has_dec_sent = make([]bool, NB_NODES)
 
@@ -772,23 +792,23 @@ func Init() {
 	for i := 0; i < NB_NODES; i++ {		
 		ChandyMisra.InitPhilosopher(&Nodes[i].Philosopher, i , NB_NODES)
 		philosopherMessages[i] = make(chan string)
-		messages[i] = make(chan []byte)
-		Nodes[i].occupant = make([]int, NB_NODES)
-		Nodes[i].has_received_advance = make([]bool, NB_NODES)
-		Nodes[i].has_dec_sent = make([]bool, NB_NODES)
-		occupants[i] = EMPTY
+		messages[i] = make(chan bytes.Buffer)
+		Nodes[i].RequestIdCounter = i * 100
+		Nodes[i].PositionSelected = make(map[int]int)
+		Nodes[i].Occupant = make(map[int]int)
+		Nodes[i].Has_received_advance = make([]bool, NB_NODES)
+		Nodes[i].Has_dec_sent = make([]bool, NB_NODES)
+		Nodes[i].Rm_critical = false
+		Nodes[i].Req_report = false
+		// occupants[i] = EMPTY
 		has_received_advance[i] = false
 		has_dec_sent[i] = false
 	}
 
 	for i := 0; i < NB_NODES; i++ {
 		Nodes[i].Philosopher.Messages = philosopherMessages
-		Nodes[i].positionSelected = make(map[int]int)
 		Nodes[i].Messages = messages
-		Nodes[i].rm_critical = false
-		Nodes[i].req_report = false
-		copy(Nodes[i].occupant, occupants)
-		copy(Nodes[i].has_received_advance, has_received_advance)
-		copy(Nodes[i].has_dec_sent, has_dec_sent)
+		copy(Nodes[i].Has_received_advance, has_received_advance)
+		copy(Nodes[i].Has_dec_sent, has_dec_sent)
 	} 
 }
