@@ -3,9 +3,10 @@
 
 TODO: 
 - finalize implementation: 
-    - ends up on Fatal "receiveRelease but not rm_critical"
+    - ends up on Fatal "receiveRelease but not rm_critical" or "Node #? already rm_critical !"
     - a queue of pending messages seems to be necessary, 
-- code duplication: WaitForReplies, RequestCMCS, enterCMCSIfICan between this and ChandyMisra.go files, find best workaround for Go lack of OO overrinding of methods
+    - there might still be a bug in the implementation
+- code duplication: WaitForReplies, RequestCMCS, enterCMCSIfICan between this and ChandyMisra.go files, have to do for now but need to find a workaround for Go lack of OO overriding of methods
 
 How-to run: 
   go run rhee.go 2>&1  |tee /tmp/tmp.log
