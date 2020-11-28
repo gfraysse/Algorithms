@@ -74,13 +74,13 @@ var Logger = log.New()
 // Debug function
 func displayNodes() {
 	for i := 0; i < Nodes[0].Philosopher.NbNodes; i++ {
-		Logger.Debug("  N#", Nodes[i].Philosopher.Id, ", inCMCS #", Nodes[i].InCMCS, ", inRheeCS=", Nodes[i].InRheeCS)
+		Logger.Debug("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!  N#", Nodes[i].Philosopher.Id, ", inCMCS #", Nodes[i].InCMCS, ", inRheeCS=", Nodes[i].InRheeCS)
 		for key, element := range Nodes[i].PositionSelected {
-			Logger.Debug("Request:", key, "=>", "Position:", element)
+			Logger.Debug("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!   Request:", key, "=>", "Position:", element)
 		}
 
 		for j, element := range Nodes[i].Occupant {
-			Logger.Debug("occupant[", j, "] =", "request #", element)
+			Logger.Debug("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!   occupant[", j, "] =", "Node #", element)
 		}
 	}
 }
@@ -114,6 +114,8 @@ type Node struct {
 	nbGrantRcv           int
 	PositionSelected     map[int]int
 	requestSize          int
+	pendingRequests      []Request
+	pendingActions       []int
 }
 
 ////////////////////////////////////////////////////////////
@@ -242,7 +244,7 @@ func (n *Node) ExecuteCSCode(request Request) {
 }
 
 func (n *Node) ReleaseCS(request Request) {
-	Logger.Info("Node #", n.Philosopher.Id," Node.ReleaseCS #########################")
+	Logger.Info("Node #", n.Philosopher.Id," Node.ReleaseCS #########################, req=", request.String())
 	displayNodes()
 	for i := 0; i < len(request.ResourceId); i++ {
 		n.sendRelease(request.ResourceId[i], request)
@@ -288,13 +290,16 @@ func (n *Node) advance_one_position(p int, request Request) {
 	n.Occupant[p] = EMPTY
 	n.Has_received_advance[p] = false
 	n.Has_dec_sent[p] = false
-	if p - 1 == 1 {
+	if p - 1 == 0 {
 		go n.sendGrant(n.Occupant[p - 1], request)
 	}
-	if n.Has_dec_sent[p - 1] == false && n.Occupant[p - 2] == EMPTY {
-		n.Has_dec_sent[p] = true
-		go n.sendDec(p - 1, n.Occupant[p - 1], request)
+	if p > 1 {
+		if n.Has_dec_sent[p - 1] == false && n.Occupant[p - 2] == EMPTY {
+			n.Has_dec_sent[p] = true
+			go n.sendDec(p - 1, n.Occupant[p - 1], request)
+		}
 	}
+	displayNodes()
 }
 
 func (n *Node) hasOccupantsAfterPosition(p int) bool {
@@ -311,6 +316,7 @@ func (n *Node) hasOccupantsAfterPosition(p int) bool {
 func (n *Node) adjust_queue(p int, request Request) {
 	Logger.Debug("Node #", n.Philosopher.Id,"** Node.adjust_queue ** p=", p);
 	if p == 0 {
+		displayNodes()
 		return
 	}
 
@@ -320,8 +326,7 @@ func (n *Node) adjust_queue(p int, request Request) {
 			continue
 		}				
 		
-		//	for n.Occupant[p] != EMPTY && n.Occupant[p - 1] == EMPTY {
-		if n.Has_dec_sent[p] == false || n.Occupant[p] != EMPTY{
+		if n.Has_dec_sent[p] == false || n.Occupant[p] != EMPTY {
 			n.Has_dec_sent[p] = true
 			go n.sendDec(p, n.Occupant[p], request)
 		}
@@ -330,6 +335,7 @@ func (n *Node) adjust_queue(p int, request Request) {
 		}
 		p ++
 	}
+	displayNodes()
 }
 
 func (n *Node) sendReport(dst int, request Request) {
@@ -422,19 +428,46 @@ func (n *Node) sendDec(p int, dst int, request Request) {
 		Logger.Fatal("sendDec", err)
 	}			
 	// Logger.Debug("Node #", n.Philosopher.Id, ", send DEC #", request.RequestId, ":", content, " to Node #", dst, ", routine #", getGID())
-	Logger.Debug("Node #", n.Philosopher.Id, ", send DEC #", request.RequestId, " to Node #", dst, ", routine #", getGID())
+	Logger.Debug("Node #", n.Philosopher.Id, ", send DEC #", request.RequestId, " to Node #", dst, " with position #", p, ", routine #", getGID())
 	n.Messages[dst] <- content
+}
+
+func (n *Node) handlePendingRequests() {
+	if len(n.pendingRequests) > 0 {
+		r :=  n.pendingRequests[0]
+		n.pendingRequests = n.pendingRequests[1:]
+		
+		var a int = n.pendingActions[0]
+		n.pendingActions = n.pendingActions[1:]
+
+		Logger.Info("Node #", n.Philosopher.Id,"** handlePendingRequests[0] **, a=", a, ", req=", r.String());
+		switch a {
+		case REPORT_TYPE:
+			go n.receiveReport(r)
+		case ADV_TYPE:
+			go n.receiveAdv(r)
+		case RELEASE_TYPE:
+			go n.receiveRelease(r)
+		}
+		
+	} else {
+		Logger.Info("Node #", n.Philosopher.Id,"** handlePendingRequests, NO PENDING REQUEST **");
+	}
 }
 
 func (n *Node) receiveReport(request Request) {
 	var occupied []int
 	Logger.Debug("Node #", n.Philosopher.Id,"** Node.receiveReport **, req=", request.String());
 	if n.Rm_critical == true {
-		Logger.Fatal("Node #", n.Philosopher.Id, " already rm_critical !")
+		Logger.Warning("Node #", n.Philosopher.Id, " already rm_critical !")
+		n.pendingRequests = append(n.pendingRequests, request)
+		n.pendingActions = append(n.pendingActions, REPORT_TYPE)
+		return
 	}
 	
 	if n.Rm_critical == false {		
 		n.Rm_critical = true
+		Logger.Info("Node #", n.Philosopher.Id, ", rm_critical false => true")
 		for i := 0; i < len(n.Occupant); i ++ {
 			if n.Occupant[i] != EMPTY {
 				if i > 0 {
@@ -445,28 +478,36 @@ func (n *Node) receiveReport(request Request) {
 		}
 		go n.sendMarked(occupied, request.RequesterNodeId, request)
 	} else {
-		Logger.Info("Node #", n.Philosopher.Id, " receiveReport n.Rm_critical = true")
+		Logger.Info("Node #", n.Philosopher.Id, ", receiveReport n.rm_critical = true")
 	}
 }
 
 func (n *Node) receiveSelect(request Request) {
 	Logger.Debug("Node #", n.Philosopher.Id,"** Node.receiveSelect **, req=", request.String());
+	if n.Rm_critical == false {
+		Logger.Fatal("Node #", n.Philosopher.Id,"** Node.receiveSelect but not in CMCS")
+	}
+	Logger.Info("Node #", n.Philosopher.Id, ", rm_critical ", n.Rm_critical, " => false")
 	n.Rm_critical = false
 	// Logger.Debug("len(n.Occupant)=", len(n.Occupant))
-	n.Occupant[request.Position] = request.RequestId
+	n.Occupant[request.Position] = request.RequesterNodeId //RequestId
 	if request.Position == 0 {
 		n.sendGrant(request.RequesterNodeId, request)		
 	}
-	n.adjust_queue(request.Position, request)
+	go n.adjust_queue(request.Position, request)
+	n.handlePendingRequests()
 }
 
 func (n *Node) receiveRelease(request Request) {
 	Logger.Debug("Node #", n.Philosopher.Id, "** Node.receiveRelease **");
-	if n.Rm_critical == true {
+	if n.Rm_critical == false {
 		n.Occupant[0] = EMPTY
 		n.adjust_queue(1, request)
 	} else {
-		Logger.Fatal("receiveRelease but not rm_critical")
+		Logger.Warning("Node #", n.Philosopher.Id, ", receiveRelease but is rm_critical")
+		n.pendingRequests = append(n.pendingRequests, request)
+		n.pendingActions = append(n.pendingActions, RELEASE_TYPE)
+		return
 	}
 }
 
@@ -514,16 +555,19 @@ func (n *Node) receiveGrant(request Request) {
 
 func (n *Node) receiveAdv(request Request) {
 	Logger.Debug("Node #", n.Philosopher.Id,"** Node.receiveAdv **");
-	if n.Rm_critical == true {
+	if n.Rm_critical == false {
 		n.Has_received_advance[request.Position] = true
 		n.adjust_queue(request.Position, request)
 	} else {
-		Logger.Fatal("receiveAdv but not rm_critical")
+		Logger.Warning("Node #", n.Philosopher.Id, ", receiveAdv but is rm_critical")
+		n.pendingRequests = append(n.pendingRequests, request)
+		n.pendingActions = append(n.pendingActions, ADV_TYPE)
+		return 
 	}
 }
 
 func (n *Node) receiveDec(request Request) {
-	Logger.Debug("Node #", n.Philosopher.Id,"** Node.receiveDec **");
+	Logger.Debug("Node #", n.Philosopher.Id,"** Node.receiveDec ** req=", request.String());
 	for k := 0; k < len(request.ResourceId); k++ {
 		go n.sendAdv(request.Position, request.ResourceId[k], request)
 	}
@@ -572,6 +616,10 @@ func (n *Node) enterCMCSIfICan(request Request) {
 func (n *Node) rcv() {	
 	Logger.Debug("Node #", n.Philosopher.Id," rcv", ", routine #", getGID())	
 	for {
+		if len(n.pendingRequests) > 0 {
+			n.handlePendingRequests()
+			continue
+		}
 		select {
 		case msg := <-n.Messages[n.Philosopher.Id]:
 			var request Request
@@ -694,6 +742,7 @@ func (n *Node) handleRequest(request Request) {
 
 func (n *Node) RequestCMCS(request Request) {
 	log.Print("Node #", n.Philosopher.Id, " RequestCMCS")
+	displayNodes()
 
 	if n.Philosopher.State == STATE_THINKING {
 		n.Philosopher.State = STATE_HUNGRY
