@@ -13,15 +13,18 @@
 #   * http://www-m3.ma.tum.de/twiki/pub/MN0506/WebHome/dijkstra.pdf
 #   * https://en.wikipedia.org/wiki/Dijkstra%27s_algorithm
 
-# Complexity is O(|E| + |V|^2)
+# Complexity is O(|E| + |V|^2) where :
+# - E is the set of edges,
+# - V the set of vertices
 
 import sys
 import string
+import time
 
 import networkx as nx
 
 ##############################
-# Local modules
+# Local functions
 ##############################
 def neighbours(vertex, adjacency_matrix):
     Q = []
@@ -31,9 +34,10 @@ def neighbours(vertex, adjacency_matrix):
             Q.append(v)
     return Q
 
-def dijkstra(adjacency_matrix, entry):
-    INFINITY = 100000
-
+def dijkstra(adjacency_matrix, entry, end):
+    start_time = time.time()
+    INFINITY = sys.maxsize
+    
     current_vertex = entry
     num_nodes = len(adjacency_matrix)
         
@@ -53,6 +57,8 @@ def dijkstra(adjacency_matrix, entry):
         for q in Q:
             if (dist[q] < min_dist):
                 v = q
+                if q == end:
+                    return dist[q], prev[q], time.time() - start_time
 
         N = neighbours(v, adjacency_matrix)
         Q.remove(v)
@@ -63,7 +69,7 @@ def dijkstra(adjacency_matrix, entry):
                 prev[n] = prev[v][:]
                 prev[n].append(v)
 
-    return dist, prev
+    return dist, prev, time.time() - start_time
 
 #=============================================================================#
 def main(arguments):
@@ -97,16 +103,34 @@ def main(arguments):
     adjacency_matrix = nx.convert.to_dict_of_dicts (G)
 
     node = 0
-    dist, prev = dijkstra(adjacency_matrix, node)
+    print("Example 1: Compute distance of all nodes from node 0")
+    dist, prev, exec_time = dijkstra(adjacency_matrix, node, None)    
     print ("Distance vector from node #" + vertices[node] + " is", dist)
     print ("Nodes on the path from node #" + vertices[node] + " are", prev)
-    
+    print("Execution time of algo on input: %s seconds" % (exec_time))
+
+    print("\n")
+    example_dest = 8
+    print("Example 2: Compute distance of node 8 from node ", example_dest)
+    dist, prev, exec_time = dijkstra(adjacency_matrix, node, example_dest)
+    print ("Shortest distance from node #%s to node #%s is %s" % (vertices[node], vertices[example_dest], dist))
+    print ("Nodes on the path from node #%s to node %s are %s" % (vertices[node], vertices[example_dest], prev))
+    print("Execution time of algo on input: %s seconds" % (exec_time))
+
+    print("\n")
+    example_dest = 3
+    print("Example 2: Compute distance of node 8 from node ", example_dest)
+    dist, prev, exec_time = dijkstra(adjacency_matrix, node, example_dest)
+    print ("Shortest distance from node #%s to node #%s is %s" % (vertices[node], vertices[example_dest], dist))
+    print ("Nodes on the path from node #%s to node %s are %s" % (vertices[node], vertices[example_dest], prev))
+    print("Execution time of algo on input: %s seconds" % (exec_time))
+
     sys.exit(0)
   
 #=============================================================================#
 if __name__ == '__main__':
     if sys.version_info[0] < 3:
-        print ("Untested with  Python < 3")
+        print ("Untested with Python < 3")
 
     main(sys.argv)
 else:
